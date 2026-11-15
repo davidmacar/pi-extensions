@@ -1,103 +1,45 @@
-# pi-failover-router
+# pi-extensions
 
-A Pi extension that registers **virtual models** which fail over across channels when the
-failure is owned by the provider, not by the request.
+A collection of Pi extensions, one directory per extension. This repository root holds the
+Git history; each extension is self-contained inside its own folder with its own
+`package.json`, tests, and README.
 
-## Why it exists
+## Extensions
 
-Pi classifies a terminal error into exactly one category, and only six of them move a
-fallback chain:
+| Extension | What it does |
+| --- | --- |
+| [`pi-failover-router`](./pi-failover-router) | Registers **virtual models** that fail over across channels when the failure is owned by the provider rather than by the request. Reads the raw error message instead of Pi's category, so channel defects such as a 400 `invalid_request_error` on tool calls or a `499 stream read failed` still rotate the chain. |
 
-```
-quota · auth · rate_limit · provider_unavailable · timeout · network
-```
+## Install an extension
 
-Everything else stops the run where it is. Two real channel defects land in the dead zone:
-
-| Observed error | Pi category | Chain moves? |
-| --- | --- | --- |
-| `<model> requires Responses for tool calls; this account only supports Chat Completions` (400, `invalid_request_error`) | `invalid_request` | **no** |
-| `status_code=499, upstream stream read failed before completion: http2: response body closed` | generic `unavailable` (no keyword matches) | **no** |
-
-Both are **channel** problems: the same model on another channel works. The classifier
-cannot tell, because it only reads the label. This extension reads the raw message instead.
-
-## What it does
-
-`route(request, ctx)` runs before every request. On `reason: "retry"` it inspects
-`request.failed.message.errorMessage`:
-
-- **rotates** to the next candidate when the failure is channel-owned or transient;
-- **refuses to rotate** when the failure is request-shaped (context length, malformed
-  payload, missing field, unknown), because every model would fail the same way;
-- puts the failed model in **cooldown** (30 min for quota/auth, 2 min otherwise);
-- keeps the model that failed when it will not rotate, so you see the real error instead
-  of a silently different channel.
-
-Other reasons (`user`, `continuation`, `direct`) stick to the model that last answered,
-which keeps the prompt cache warm.
-
-## Configuration
-
-`~/.pi/agent/failover-router.json` (override with `PI_FAILOVER_ROUTER_CONFIG`):
+Each extension's README carries its own install steps. The common shape is a single entry
+in `~/.pi/agent/settings.json` pointing at the extension's entry file:
 
 ```json
 {
-  "virtuals": [
-    {
-      "provider": "router",
-      "id": "sol",
-      "name": "Sol (failover)",
-      "thinkingLevels": ["high", "xhigh"],
-      "chain": [
-        { "model": "subrouter-best/gpt-6.1-sol", "thinkingLevel": "xhigh" },
-        { "model": "subrouter-000/gpt-6.1-sol", "thinkingLevel": "xhigh" },
-        { "model": "subrouter-fxpayback/gpt-6.1-sol", "thinkingLevel": "xhigh" }
-      ]
-    }
-  ]
+  "extensions": ["/home/<you>/Apps/pi-extensions/pi-failover-router/index.js"]
 }
 ```
 
-- `chain` is ordered by preference; the first entry is the default target.
-- A step is either an object or the string `"provider/id"` (optionally `provider/id@level`).
-- Every referenced `provider/id` must exist in `~/.pi/agent/models.json` with credentials.
-- Config errors are reported through `pi.log` and register nothing: a typo never becomes a
-  silently dead chain.
+Then `/reload`.
 
-## Install
+## Layout
 
-1. Add the extension path to `~/.pi/agent/settings.json`:
-
-   ```json
-   { "extensions": ["/home/<you>/Apps/pi-failover-router/index.js"] }
-   ```
-
-2. Write the config file (see above).
-3. `/reload`, then pick the virtual model with `/model` — it appears as `router/sol`.
-
-## Verify it is live
-
-- Startup log carries `failover-router: registered router/sol (N candidates)`.
-- `/model` lists the virtual model under provider `router`.
-- On a rotation the log reads
-  `failover-router: router/sol retry after <model> — <kind>: <reason>`.
-
-## Tests
-
-```bash
-npm test
+```
+pi-extensions/
+├── README.md                 this file
+└── pi-failover-router/       one extension
+    ├── index.js              entry file registered in settings.json
+    ├── lib/                  classification and config loading
+    ├── test/                 node --test suites
+    └── README.md             behaviour, configuration, install
 ```
 
-30 classification/config cases and 10 router cases, including the two real error bodies
-above and the must-not-rotate cases. `node --test`, no dependencies.
+## Development
 
-## Scope and honest limits
+Run a given extension's suite from its own directory; every extension here uses the
+built-in Node test runner and no dependencies:
 
-- It routes **models**, not channels. A Pi request cannot pin a channel; a channel can only
-  be pinned by using a provider whose API key is bound to that channel.
-- It reacts on `retry`, so Pi has already spent its own retries on the failed model before
-  a rotation happens.
-- A request-shaped failure is never retried elsewhere, by design. If a real channel defect
-  ever produces a request-shaped label not covered in `lib/classify.js`, add the marker
-  there **with a test** rather than loosening the generic patterns.
+```bash
+cd pi-failover-router && npm test
+```
