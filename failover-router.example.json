@@ -1,0 +1,27 @@
+{
+  "virtuals": [
+    {
+      "provider": "router",
+      "id": "sol",
+      "name": "Sol (failover)",
+      "thinkingLevels": ["high", "xhigh"],
+      "chain": [
+        { "model": "subrouter-best/gpt-6.1-sol", "thinkingLevel": "xhigh" },
+        { "model": "subrouter-000/gpt-6.1-sol", "thinkingLevel": "xhigh" },
+        { "model": "subrouter-fxpayback/gpt-6.1-sol", "thinkingLevel": "xhigh" }
+      ]
+    },
+    {
+      "provider": "router",
+      "id": "deepseek",
+      "name": "Deepseek 4.1 Flash (failover)",
+      "thinkingLevels": ["high", "max"],
+      "chain": [
+        { "model": "subrouter-znu/deepseek-v4.1-flash-1017", "thinkingLevel": "high" },
+        { "model": "subrouter-stableai/deepseek-v4.1-flash-1017", "thinkingLevel": "high" },
+        { "model": "subrouter-relai/deepseek-v4.1-flash-1017", "thinkingLevel": "high" },
+        { "model": "subrouter-lingai/deepseek-v4.1-flash-1017", "thinkingLevel": "high" }
+      ]
+    }
+  ]
+}
