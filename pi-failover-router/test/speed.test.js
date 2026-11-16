@@ -235,3 +235,50 @@ test("a channel that never answers is recorded with its reason", async () => {
   assert.equal(failed.length, 1);
   assert.match(failed[0].message, /no answer within/);
 });
+
+test("a probe that comes back as a channel error reports the provider text", async () => {
+  const { measureChannel } = await import("../lib/speed-probe.js");
+  const complete = async () => ({
+    role: "assistant",
+    stopReason: "error",
+    errorMessage:
+      'status_code=400, body: {"error":{"message":"gpt-6.1-sol requires Responses for tool calls; this account only supports Chat Completions","type":"invalid_request_error"}}',
+    usage: { output: 0 },
+  });
+  await assert.rejects(
+    () => measureChannel({ model: { provider: "p", id: "m" }, complete, requestModel: {} }),
+    /channel error.*requires Responses for tool calls/,
+  );
+});
+
+test("a probe that returns no usage says what the response actually was", async () => {
+  const { measureChannel } = await import("../lib/speed-probe.js");
+  const complete = async () => ({ role: "assistant", stopReason: "stop", usage: undefined });
+  await assert.rejects(
+    () => measureChannel({ model: { provider: "p", id: "m" }, complete, requestModel: {} }),
+    /no output tokens.*stopReason=stop.*no usage/,
+  );
+});
+
+test("a probe that returns an empty usage reports the numbers", async () => {
+  const { measureChannel } = await import("../lib/speed-probe.js");
+  const complete = async () => ({
+    role: "assistant",
+    stopReason: "stop",
+    usage: { input: 12, output: 0, totalTokens: 12 },
+  });
+  await assert.rejects(
+    () => measureChannel({ model: { provider: "p", id: "m" }, complete, requestModel: {} }),
+    /no output tokens.*stopReason=stop.*usage=\{input:12,output:0/,
+  );
+});
+
+test("a healthy response still measures", async () => {
+  const { measureChannel } = await import("../lib/speed-probe.js");
+  let clock = 0;
+  const now = () => (clock += 500);
+  const complete = async () => ({ role: "assistant", stopReason: "stop", usage: { output: 100 } });
+  const result = await measureChannel({ model: { provider: "p", id: "m" }, complete, requestModel: {}, now });
+  assert.equal(result.outputTokens, 100);
+  assert.ok(result.tokensPerSecond > 0);
+});

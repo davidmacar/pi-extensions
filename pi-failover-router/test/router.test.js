@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import failoverRouter, { MEASURE_WAIT_MS, noteFailure } from "../index.js";
 
 /** Minimal fake ExtensionAPI + model registry that records routing decisions. */
@@ -44,7 +46,7 @@ const config = {
 
 function boot(cfg = config) {
   const h = harness({ config: cfg, catalog });
-  const path = "/tmp/pi-failover-router-test.json";
+  const path = join(tmpdir(), "pi-failover-router-test.json");
   writeFileSync(path, JSON.stringify(cfg));
   process.env.PI_FAILOVER_ROUTER_CONFIG = path;
   failoverRouter(h.pi);
@@ -223,7 +225,7 @@ function probeHarness({ cfg, catalog, output = 20, latencyMs = () => 20 }) {
   const registered = [];
   const handlers = new Map();
   const logs = [];
-  const speedPath = `/tmp/pi-failover-router-speed-${process.pid}-${Math.random().toString(36).slice(2)}.json`;
+  const speedPath = join(tmpdir(), `pi-failover-router-speed-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   const pi = {
     log: (m) => logs.push(m),
     registerVirtualModel: (def) => registered.push(def),
@@ -239,7 +241,7 @@ function probeHarness({ cfg, catalog, output = 20, latencyMs = () => 20 }) {
       },
     },
   };
-  const path = `/tmp/pi-failover-router-test-${process.pid}-${Math.random().toString(36).slice(2)}.json`;
+  const path = join(tmpdir(), `pi-failover-router-test-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(path, JSON.stringify(cfg));
   process.env.PI_FAILOVER_ROUTER_CONFIG = path;
   process.env.PI_FAILOVER_ROUTER_SPEED_CACHE = speedPath;
@@ -378,10 +380,10 @@ function deadEndHarness({ cfg = speedConfig, catalog: cat = FAST_CATALOG, canCon
     modelRegistry: { find: (provider, id) => cat.find((m) => m.provider === provider && m.id === id) },
     model: undefined,
   };
-  const path = `/tmp/pi-failover-router-deadend-${process.pid}-${Math.random().toString(36).slice(2)}.json`;
+  const path = join(tmpdir(), `pi-failover-router-deadend-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(path, JSON.stringify(cfg));
   process.env.PI_FAILOVER_ROUTER_CONFIG = path;
-  process.env.PI_FAILOVER_ROUTER_SPEED_CACHE = `/tmp/never-${process.pid}.json`;
+  process.env.PI_FAILOVER_ROUTER_SPEED_CACHE = join(tmpdir(), `never-${process.pid}.json`);
   failoverRouter(pi);
   delete process.env.PI_FAILOVER_ROUTER_CONFIG;
   delete process.env.PI_FAILOVER_ROUTER_SPEED_CACHE;
@@ -541,7 +543,7 @@ test("a missing config file registers nothing and does not throw", () => {
 
 test("invalid config is reported through pi.log and registers nothing", () => {
   const h = harness({ config, catalog });
-  const path = "/tmp/pi-failover-router-bad.json";
+  const path = join(tmpdir(), "pi-failover-router-bad.json");
   writeFileSync(path, JSON.stringify({ virtuals: [{ provider: "r", id: "x", chain: [] }] }));
   process.env.PI_FAILOVER_ROUTER_CONFIG = path;
   failoverRouter(h.pi);

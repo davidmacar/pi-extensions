@@ -54,6 +54,33 @@ export function createProbeBudget({ firstTokenMs = PROBE_FIRST_TOKEN_MS, now = D
   };
 }
 
+
+/**
+ * Describes a response well enough to diagnose a probe that produced nothing.
+ * A bare "no output tokens" hides whether the channel answered with an error, came
+ * back empty, or simply does not report usage — three very different problems.
+ *
+ * @param {unknown} message
+ */
+export function describeResponse(message) {
+  if (!message || typeof message !== "object") return "no response object";
+  const record = /** @type {Record<string, unknown>} */ (message);
+  const parts = [`stopReason=${typeof record.stopReason === "string" ? record.stopReason : "missing"}`];
+  const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage.trim() : "";
+  if (errorMessage) parts.push(`errorMessage=${errorMessage.slice(0, 300)}`);
+  const usage = record.usage;
+  if (!usage || typeof usage !== "object") {
+    parts.push("no usage");
+  } else {
+    const counters = /** @type {Record<string, unknown>} */ (usage);
+    const shown = ["input", "output", "totalTokens"]
+      .filter((key) => typeof counters[key] === "number")
+      .map((key) => `${key}:${counters[key]}`);
+    parts.push(shown.length > 0 ? `usage={${shown.join(",")}}` : "usage without counters");
+  }
+  return parts.join("; ");
+}
+
 /**
  * @param {object} args
  * @param {{provider: string, id: string}} args.model
@@ -77,9 +104,22 @@ export async function measureChannel({ model, complete, requestModel, now = Date
     active.stop();
   }
   const elapsedMs = now() - startedAt;
+  const failureText = typeof message?.errorMessage === "string" ? message.errorMessage.trim() : "";
+
+  // A channel that answers with an error is the interesting case: it is exactly the
+  // channel-owned defect the router exists for, and it must not be reported as an
+  // empty measurement.
+  if (message?.stopReason === "error" || failureText) {
+    throw new Error(
+      `${model.provider}/${model.id}: channel error (${describeResponse(message)})`,
+    );
+  }
+
   const outputTokens = message?.usage?.output;
   if (typeof outputTokens !== "number" || !Number.isFinite(outputTokens) || outputTokens <= 0) {
-    throw new Error(`${model.provider}/${model.id}: probe reported no output tokens`);
+    throw new Error(
+      `${model.provider}/${model.id}: probe reported no output tokens (${describeResponse(message)})`,
+    );
   }
   if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
     throw new Error(`${model.provider}/${model.id}: probe reported no elapsed time`);
