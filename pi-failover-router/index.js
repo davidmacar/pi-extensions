@@ -20,7 +20,15 @@ import { join, resolve } from "node:path";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { classifyFailure, cooldownMs, nextCandidate } from "./lib/classify.js";
 import { ConfigError, loadRouterConfig } from "./lib/config.js";
-import { emptyCache, probeIsDue, readSpeedCache, recordSample, tokensPerSecond } from "./lib/speed-cache.js";
+import {
+  dueRefs,
+  emptyCache,
+  readSpeedCache,
+  recordFailure,
+  recordSample,
+  startingTier,
+  tokensPerSecond,
+} from "./lib/speed-cache.js";
 import { orderBySpeed } from "./lib/speed-order.js";
 import { probeChannels } from "./lib/speed-probe.js";
 import { lastAssistantMessage, resolveDeadEnd } from "./lib/dead-end.js";
@@ -31,6 +39,11 @@ export const DEFAULT_SPEED_FILE = "failover-router-speed.json";
 export const SPEED_REFRESH_MS = 15 * 60_000;
 /** How many times one virtual may force a continuation for unretryable failures. */
 export const MAX_FORCED_CONTINUATIONS = 3;
+/**
+ * How long a request may wait for the measurement session before routing with
+ * whatever measurements already exist. A probe must never turn into a hang.
+ */
+export const MEASURE_WAIT_MS = 8_000;
 
 /** @param {string} path */
 function expandHome(path) {
@@ -176,12 +189,26 @@ export default function failoverRouter(pi) {
       route(request, ctx) {
         // The measurement session starts with the session and runs before the
         // first request. Waiting for it here is what makes that first request
-        // already use measured throughput; every later request is synchronous.
+        // already use measured throughput — but only up to a budget, because a
+        // slow channel must never turn into a hung request.
         if (!measurement) return decideRoute(def, key, request, ctx);
-        return measurement.then(
-          () => decideRoute(def, key, request, ctx),
-          () => decideRoute(def, key, request, ctx),
-        );
+        const inFlight = measurement;
+        const ready = Promise.race([
+          inFlight.then(
+            () => true,
+            () => true,
+          ),
+          new Promise((done) => {
+            const timer = setTimeout(() => done(false), MEASURE_WAIT_MS);
+            timer.unref?.();
+          }),
+        ]);
+        return ready.then((settled) => {
+          if (!settled) {
+            pi.log?.(`failover-router: ${key} routing without waiting further for measurements`);
+          }
+          return decideRoute(def, key, request, ctx);
+        });
       },
     });
 
@@ -278,20 +305,33 @@ export default function failoverRouter(pi) {
     }
   };
 
-  const runProbe = (ctx) => {
+  const runProbe = (ctx, pending) => {
     if (measurement) return measurement;
     const registry = ctx?.modelRegistry;
     if (!registry || typeof registry.complete !== "function") return undefined;
+    if (pending.length === 0) return undefined;
     const find = (ref) => {
       const slash = ref.indexOf("/");
       return slash > 0 ? registry.find(ref.slice(0, slash), ref.slice(slash + 1)) : undefined;
     };
-    measurement = probeChannels({ refs, find, complete: registry.complete.bind(registry), log: pi.log })
-      .then((measured) => {
-        for (const { ref, tokensPerSecond: speed } of measured) {
-          speedCache = recordSample(speedCache, ref, speed, Date.now());
+    measurement = probeChannels({
+      refs: pending,
+      find,
+      complete: registry.complete.bind(registry),
+      log: pi.log,
+      startingTierFor: (ref) => startingTier(speedCache, ref),
+    })
+      .then(({ measured, failed }) => {
+        const now = Date.now();
+        for (const { ref, tokensPerSecond: speed, timeoutTierMs } of measured) {
+          speedCache = recordSample(speedCache, ref, speed, now, timeoutTierMs);
         }
-        if (measured.length > 0) persist();
+        for (const { ref, message } of failed) {
+          // Kept in the cache so the channel is retried next time and the log has
+          // a durable record; without it a permanently failing channel vanishes.
+          speedCache = recordFailure(speedCache, ref, message, now);
+        }
+        if (measured.length > 0 || failed.length > 0) persist();
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -304,8 +344,10 @@ export default function failoverRouter(pi) {
   };
 
   const measureIfDue = (ctx) => {
-    if (!probeIsDue(speedCache, refs, Date.now())) return;
-    void runProbe(ctx);
+    // Only the channels that are stale, never measured, or last failed.
+    const pending = dueRefs(speedCache, refs, Date.now());
+    if (pending.length === 0) return;
+    void runProbe(ctx, pending);
   };
 
   pi.on?.("session_start", (_event, ctx) => {

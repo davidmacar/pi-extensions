@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { readFileSync, writeFileSync } from "node:fs";
-import failoverRouter, { MAX_FORCED_CONTINUATIONS } from "../index.js";
+import failoverRouter, { MAX_FORCED_CONTINUATIONS, MEASURE_WAIT_MS } from "../index.js";
 
 /** Minimal fake ExtensionAPI + model registry that records routing decisions. */
 function harness({ config, catalog }) {
@@ -489,4 +489,39 @@ test("invalid config is reported through pi.log and registers nothing", () => {
   delete process.env.PI_FAILOVER_ROUTER_CONFIG;
   assert.equal(h.registered.length, 0);
   assert.match(h.logs.join("\n"), /config not loaded/);
+});
+
+test("a probe failure is persisted, not silently dropped", async () => {
+  const { handlers, logs, ctx, speedPath } = probeHarness({
+    cfg: speedConfig,
+    catalog: FAST_CATALOG,
+    latencyMs: () => 5,
+  });
+  // A registry that answers, but reports no usage: the probe must record a failure.
+  ctx.modelRegistry.complete = async () => ({ usage: { output: 0 } });
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+  await settle(() => logs.filter((l) => l.includes("probe reported no output tokens")).length >= 2);
+  handlers.get("session_shutdown")?.();
+  const persisted = JSON.parse(readFileSync(speedPath, "utf8"));
+  const failed = Object.values(persisted.channels).filter((e) => e.lastError);
+  assert.equal(failed.length, 2, "both channels record why they could not be measured");
+  assert.match(failed[0].lastError.message, /no output tokens/);
+});
+
+test("a request does not wait forever for a measurement session", async () => {
+  const { registered, handlers, ctx, logs } = probeHarness({
+    cfg: speedConfig,
+    catalog: FAST_CATALOG,
+    // Far longer than the wait budget, so racing matters.
+    latencyMs: () => MEASURE_WAIT_MS + 400,
+  });
+  const fast = registered.find((r) => r.id === "sol-rapido");
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+  const startedAt = Date.now();
+  const out = await fast.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  const elapsed = Date.now() - startedAt;
+  handlers.get("session_shutdown")?.();
+  assert.ok(elapsed < MEASURE_WAIT_MS + 1000, `routed after ${elapsed} ms`);
+  assert.equal(out.model.provider, "subrouter-best", "falls back to the configured order");
+  assert.match(logs.join("\n"), /routing without waiting further/);
 });

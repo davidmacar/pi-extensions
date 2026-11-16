@@ -63,13 +63,22 @@ the cheap list until a probe says otherwise.
 ### Throughput measurement
 
 - A measurement session starts with each Pi session and runs **before** the first request: the
-  first request waits for it, every later one is synchronous.
+  first request waits for it, but never longer than `MEASURE_WAIT_MS` (8 s). If the probes are
+  still running after that, the request is routed with whatever measurements already exist. A
+  probe can never turn into a hang.
 - The result is cached in `~/.pi/agent/failover-router-speed.json` for **15 minutes**, so a run of
   consecutive sessions pays for one measurement, not one per session.
 - While a session stays active the measurement is refreshed every 15 minutes. When the session
   ends the timer is cleared, so an idle install never probes.
-- Each channel is probed sequentially with a 100 token reply and a 20 second timeout. The median of
-  the last 5 samples is used, so one hung probe cannot win.
+- Each channel is probed sequentially with a 100 token reply. Timeouts scale per channel: the first
+  attempt uses the **15 s** tier, a channel that stays silent moves to the **45 s** tier, and
+  the tier that worked is remembered so a slow reasoning model stops paying for the short attempt
+  on every run. The median of the last 5 samples is used, so one hung probe cannot win.
+- **Failures are remembered.** A channel that cannot be measured is stored with its reason and
+  retried on the next measurement session. Without this, a channel that always times out looks
+  exactly like one that was never measured — which is how an entire family silently went unmeasured.
+- **Only the channels that are due are probed**: never measured, sample older than the window, or
+  last attempt failed. A fresh healthy channel is not re-measured to repair its neighbours.
 - Only channels of `speed` chains are probed; the cost chains never spend a request.
 - A probe is a real request on a real channel: it costs tokens and counts toward session cost.
 
