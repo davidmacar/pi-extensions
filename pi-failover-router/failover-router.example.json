@@ -2,25 +2,136 @@
   "virtuals": [
     {
       "provider": "router",
-      "id": "sol",
-      "name": "Sol (failover)",
-      "thinkingLevels": ["high", "xhigh"],
+      "id": "sol-barato",
+      "name": "GPT 6.1 Sol — barato",
+      "description": "Canales de gpt-6.",
+      "order": "cost",
+      "thinkingLevels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "input": [
+        "text",
+        "image"
+      ],
       "chain": [
-        { "model": "subrouter-best/gpt-6.1-sol", "thinkingLevel": "xhigh" },
-        { "model": "subrouter-000/gpt-6.1-sol", "thinkingLevel": "xhigh" },
-        { "model": "subrouter-fxpayback/gpt-6.1-sol", "thinkingLevel": "xhigh" }
+        {
+          "model": "subrouter-fxpayback/gpt-6.1-sol"
+        },
+        {
+          "model": "subrouter-best/gpt-6.1-sol"
+        },
+        {
+          "model": "subrouter-000/gpt-6.1-sol"
+        },
+        {
+          "model": "subrouter-xcgx/gpt-6.1-sol"
+        }
       ]
     },
     {
       "provider": "router",
-      "id": "deepseek",
-      "name": "Deepseek 4.1 Flash (failover)",
-      "thinkingLevels": ["high", "max"],
+      "id": "deepseek-barato",
+      "name": "Deepseek 4.1 Flash — barato",
+      "description": "Canales de deepseek-v4.",
+      "order": "cost",
+      "thinkingLevels": [
+        "off",
+        "high",
+        "max"
+      ],
+      "contextWindow": 1000000,
+      "maxTokens": 384000,
+      "input": [
+        "text",
+        "image"
+      ],
       "chain": [
-        { "model": "subrouter-znu/deepseek-v4.1-flash-1017", "thinkingLevel": "high" },
-        { "model": "subrouter-stableai/deepseek-v4.1-flash-1017", "thinkingLevel": "high" },
-        { "model": "subrouter-relai/deepseek-v4.1-flash-1017", "thinkingLevel": "high" },
-        { "model": "subrouter-lingai/deepseek-v4.1-flash-1017", "thinkingLevel": "high" }
+        {
+          "model": "subrouter-znu/deepseek-v4.1-flash-1017"
+        },
+        {
+          "model": "subrouter-stableai/deepseek-v4.1-flash-1017"
+        },
+        {
+          "model": "subrouter-relai/deepseek-v4.1-flash-1017"
+        },
+        {
+          "model": "subrouter-lingai/deepseek-v4.1-flash-1017"
+        }
+      ]
+    },
+    {
+      "provider": "router",
+      "id": "sol-rapido",
+      "name": "GPT 6.1 Sol — rápido",
+      "description": "Los mismos canales de gpt-6.",
+      "order": "speed",
+      "thinkingLevels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "input": [
+        "text",
+        "image"
+      ],
+      "chain": [
+        {
+          "model": "subrouter-fxpayback/gpt-6.1-sol"
+        },
+        {
+          "model": "subrouter-best/gpt-6.1-sol"
+        },
+        {
+          "model": "subrouter-000/gpt-6.1-sol"
+        },
+        {
+          "model": "subrouter-xcgx/gpt-6.1-sol"
+        }
+      ]
+    },
+    {
+      "provider": "router",
+      "id": "deepseek-rapido",
+      "name": "Deepseek 4.1 Flash — rápido",
+      "description": "Los mismos canales de deepseek-v4.",
+      "order": "speed",
+      "thinkingLevels": [
+        "off",
+        "high",
+        "max"
+      ],
+      "contextWindow": 1000000,
+      "maxTokens": 384000,
+      "input": [
+        "text",
+        "image"
+      ],
+      "chain": [
+        {
+          "model": "subrouter-znu/deepseek-v4.1-flash-1017"
+        },
+        {
+          "model": "subrouter-stableai/deepseek-v4.1-flash-1017"
+        },
+        {
+          "model": "subrouter-relai/deepseek-v4.1-flash-1017"
+        },
+        {
+          "model": "subrouter-lingai/deepseek-v4.1-flash-1017"
+        }
       ]
     }
   ]

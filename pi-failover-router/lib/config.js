@@ -7,6 +7,9 @@ import { readFileSync } from "node:fs";
 export const DEFAULT_CONFIG_PATH = "~/.pi/agent/failover-router.json";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const INPUT_TYPES = new Set(["text", "image"]);
+/** How a chain is ordered at request time. */
+export const CHAIN_ORDERS = new Set(["cost", "speed"]);
 
 export class ConfigError extends Error {}
 
@@ -87,7 +90,30 @@ export function normalizeVirtual(raw) {
   }
 
   const out = { provider, id, name, thinkingLevels, chain };
+  if (raw.order !== undefined) {
+    if (!CHAIN_ORDERS.has(raw.order)) {
+      throw new ConfigError(`${provider}/${id}: order must be "cost" or "speed", got ${JSON.stringify(raw.order)}`);
+    }
+    out.order = raw.order;
+  }
   if (typeof raw.description === "string" && raw.description.trim()) out.description = raw.description.trim();
+  for (const key of ["contextWindow", "maxTokens"]) {
+    const value = raw[key];
+    if (value === undefined) continue;
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new ConfigError(`${provider}/${id}: ${key} must be a positive integer`);
+    }
+    out[key] = value;
+  }
+  if (raw.input !== undefined) {
+    if (!Array.isArray(raw.input) || raw.input.length === 0) {
+      throw new ConfigError(`${provider}/${id}: input must be a non-empty array`);
+    }
+    for (const type of raw.input) {
+      if (!INPUT_TYPES.has(type)) throw new ConfigError(`${provider}/${id}: unknown input type "${type}"`);
+    }
+    out.input = [...raw.input];
+  }
   return out;
 }
 

@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { writeFileSync } from "node:fs";
-import failoverRouter from "../index.js";
+import { readFileSync, writeFileSync } from "node:fs";
+import failoverRouter, { MAX_FORCED_CONTINUATIONS } from "../index.js";
 
 /** Minimal fake ExtensionAPI + model registry that records routing decisions. */
 function harness({ config, catalog }) {
@@ -175,6 +175,301 @@ test("the failing model enters cooldown so the next rotation skips it", () => {
   const third = registered[0].route(failed("subrouter-fxpayback"), ctx);
   // nothing left: it stays on the model that just failed
   assert.equal(third.model.provider, "subrouter-fxpayback");
+});
+
+test("a chain step without a level keeps the level the caller selected", () => {
+  const cfg = {
+    virtuals: [
+      {
+        provider: "router",
+        id: "sol",
+        name: "Sol failover",
+        thinkingLevels: ["high", "xhigh"],
+        chain: [{ model: "subrouter-best/gpt-6.1-sol" }, { model: "subrouter-000/gpt-6.1-sol" }],
+      },
+    ],
+  };
+  const { registered, ctx } = boot(cfg);
+
+  const first = registered[0].route({ reason: "user", thinkingLevel: "xhigh", messages: [] }, ctx);
+  assert.equal(first.model.provider, "subrouter-best");
+  assert.equal(first.thinkingLevel, "xhigh");
+
+  const retry = registered[0].route(
+    {
+      reason: "retry",
+      thinkingLevel: "xhigh",
+      messages: [],
+      failed: {
+        model: { provider: "subrouter-best", id: "gpt-6.1-sol" },
+        thinkingLevel: "xhigh",
+        message: { stopReason: "error", errorMessage: "503 service unavailable" },
+      },
+    },
+    ctx,
+  );
+  assert.equal(retry.model.provider, "subrouter-000");
+  assert.equal(retry.thinkingLevel, "xhigh");
+});
+
+test("an explicit chain step level wins over the selected level", () => {
+  const { registered, ctx } = boot();
+  const out = registered[0].route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(out.thinkingLevel, "xhigh");
+});
+
+/** Registry that answers probes after a per-channel delay, so throughput differs. */
+function probeHarness({ cfg, catalog, output = 20, latencyMs = () => 20 }) {
+  const registered = [];
+  const handlers = new Map();
+  const logs = [];
+  const speedPath = `/tmp/pi-failover-router-speed-${process.pid}-${Math.random().toString(36).slice(2)}.json`;
+  const pi = {
+    log: (m) => logs.push(m),
+    registerVirtualModel: (def) => registered.push(def),
+    on: (event, handler) => handlers.set(event, handler),
+  };
+  const ctx = {
+    modelRegistry: {
+      find: (provider, id) => catalog.find((m) => m.provider === provider && m.id === id),
+      complete: async (model) => {
+        const wait = latencyMs(`${model.provider}/${model.id}`);
+        await new Promise((done) => setTimeout(done, wait));
+        return { usage: { output } };
+      },
+    },
+  };
+  const path = `/tmp/pi-failover-router-test-${process.pid}-${Math.random().toString(36).slice(2)}.json`;
+  writeFileSync(path, JSON.stringify(cfg));
+  process.env.PI_FAILOVER_ROUTER_CONFIG = path;
+  process.env.PI_FAILOVER_ROUTER_SPEED_CACHE = speedPath;
+  failoverRouter(pi);
+  delete process.env.PI_FAILOVER_ROUTER_CONFIG;
+  delete process.env.PI_FAILOVER_ROUTER_SPEED_CACHE;
+  return { registered, handlers, logs, ctx, speedPath };
+}
+
+/** Waits for an observable effect, so the test never depends on a fixed sleep. */
+async function settle(predicate, timeoutMs = 3000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      if (predicate()) return true;
+    } catch {
+      // not ready yet
+    }
+    await new Promise((done) => setTimeout(done, 10));
+  }
+  return false;
+}
+
+const speedConfig = {
+  virtuals: [
+    {
+      provider: "router",
+      id: "sol-rapido",
+      name: "Sol rápido",
+      order: "speed",
+      thinkingLevels: ["high"],
+      chain: [{ model: "subrouter-best/gpt-6.1-sol" }, { model: "subrouter-000/gpt-6.1-sol" }],
+    },
+    {
+      provider: "router",
+      id: "sol",
+      name: "Sol barato",
+      thinkingLevels: ["high"],
+      chain: [{ model: "subrouter-best/gpt-6.1-sol" }, { model: "subrouter-000/gpt-6.1-sol" }],
+    },
+  ],
+};
+
+const FAST_CATALOG = [
+  { provider: "subrouter-best", id: "gpt-6.1-sol" },
+  { provider: "subrouter-000", id: "gpt-6.1-sol" },
+];
+
+/** subrouter-000 answers much faster than subrouter-best. */
+const latency = (ref) => (ref.startsWith("subrouter-000/") ? 5 : 70);
+
+test("without measurements a speed chain keeps the configured order", () => {
+  const { registered, handlers, ctx } = probeHarness({ cfg: speedConfig, catalog: FAST_CATALOG });
+  const fast = registered.find((r) => r.id === "sol-rapido");
+  const out = fast.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  handlers.get("session_shutdown")?.();
+  assert.equal(out.model.provider, "subrouter-best");
+});
+
+test("session_start measures, persists, and the fastest channel then wins", async () => {
+  const { registered, handlers, ctx, speedPath } = probeHarness({
+    cfg: speedConfig,
+    catalog: FAST_CATALOG,
+    latencyMs: latency,
+  });
+  const fast = registered.find((r) => r.id === "sol-rapido");
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+
+  const routedFast = await settle(
+    () => fast.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx).model.provider === "subrouter-000",
+  );
+  handlers.get("session_shutdown")?.();
+  assert.equal(routedFast, true, "the measured fastest channel must be tried first");
+
+  const persisted = JSON.parse(readFileSync(speedPath, "utf8"));
+  assert.equal(Object.keys(persisted.channels).length, 2);
+});
+
+test("a chain with cost order ignores speed measurements", async () => {
+  const { registered, handlers, ctx } = probeHarness({ cfg: speedConfig, catalog: FAST_CATALOG, latencyMs: latency });
+  const cheap = registered.find((r) => r.id === "sol");
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+  await settle(() => true);
+  await new Promise((done) => setTimeout(done, 250));
+  handlers.get("session_shutdown")?.();
+  const out = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(out.model.provider, "subrouter-best");
+});
+
+test("a fresh measurement session is not repeated inside the window", async () => {
+  const { handlers, ctx, logs } = probeHarness({ cfg: speedConfig, catalog: FAST_CATALOG, latencyMs: latency });
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+  await settle(() => logs.filter((l) => l.includes("speed probe subrouter")).length === 2);
+  const first = logs.filter((l) => l.includes("speed probe subrouter")).length;
+  assert.equal(first, 2);
+
+  handlers.get("session_start")({ reason: "resume" }, ctx);
+  await new Promise((done) => setTimeout(done, 250));
+  handlers.get("session_shutdown")?.();
+  const total = logs.filter((l) => l.includes("speed probe subrouter")).length;
+  assert.equal(total, 2, "a start inside the 15 minute window must not probe again");
+});
+
+test("the first request waits for the measurement session instead of guessing", async () => {
+  const { registered, handlers, ctx } = probeHarness({ cfg: speedConfig, catalog: FAST_CATALOG, latencyMs: latency });
+  const fast = registered.find((r) => r.id === "sol-rapido");
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+  // No waiting: the probe is still running, so route() must return a promise.
+  const pending = fast.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(typeof pending?.then, "function", "route must await the measurement in flight");
+  const out = await pending;
+  handlers.get("session_shutdown")?.();
+  assert.equal(out.model.provider, "subrouter-000");
+});
+
+test("a chain without speed order never probes", async () => {
+  const cfg = { virtuals: [speedConfig.virtuals[1]] };
+  const { handlers, logs, ctx } = probeHarness({ cfg, catalog: FAST_CATALOG });
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
+  await new Promise((done) => setTimeout(done, 150));
+  handlers.get("session_shutdown")?.();
+  assert.equal(logs.filter((l) => l.includes("speed probe")).length, 0);
+});
+
+/** Harness that also records event handlers, for the dead-end path. */
+function deadEndHarness({ cfg = speedConfig, catalog: cat = FAST_CATALOG, canContinue = true } = {}) {
+  const registered = [];
+  const handlers = new Map();
+  const logs = [];
+  const pi = {
+    log: (m) => logs.push(m),
+    registerVirtualModel: (def) => registered.push(def),
+    on: (event, handler) => handlers.set(event, handler),
+  };
+  const ctx = {
+    modelRegistry: { find: (provider, id) => cat.find((m) => m.provider === provider && m.id === id) },
+    model: undefined,
+  };
+  const path = `/tmp/pi-failover-router-deadend-${process.pid}-${Math.random().toString(36).slice(2)}.json`;
+  writeFileSync(path, JSON.stringify(cfg));
+  process.env.PI_FAILOVER_ROUTER_CONFIG = path;
+  process.env.PI_FAILOVER_ROUTER_SPEED_CACHE = `/tmp/never-${process.pid}.json`;
+  failoverRouter(pi);
+  delete process.env.PI_FAILOVER_ROUTER_CONFIG;
+  delete process.env.PI_FAILOVER_ROUTER_SPEED_CACHE;
+  return { registered, handlers, logs, ctx, canContinue };
+}
+
+const STREAM_FAILED = {
+  role: "assistant",
+  provider: "subrouter-best",
+  model: "gpt-6.1-sol",
+  stopReason: "error",
+  errorMessage: "upstream stream read failed before completion: http2: response body closed",
+};
+
+test("an unretryable stream failure moves the next request to the following channel", () => {
+  const { registered, handlers, logs, ctx } = deadEndHarness();
+  const cheap = registered.find((r) => r.id === "sol");
+
+  // First request lands on the configured first channel.
+  const first = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(first.model.provider, "subrouter-best");
+
+  // Pi ends the run without a retry, and the extension takes over.
+  ctx.model = { provider: "router", id: "sol" };
+  handlers.get("agent_end")({ messages: [{ role: "user" }, STREAM_FAILED] }, ctx);
+  assert.match(logs.join("\n"), /taking over subrouter-best\/gpt-6\.1-sol/);
+
+  // The boundary asks for one more request, which must use the next channel.
+  const settle = handlers.get("agent_before_settle")({
+    outcome: "error",
+    continue: false,
+    entries: [],
+    context: { canContinue: true },
+  });
+  assert.equal(settle?.continue, true);
+  assert.equal(settle.entries[0].type, "custom_message");
+
+  const second = cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(second.model.provider, "subrouter-000");
+});
+
+test("a request-shaped failure does not take over", () => {
+  const { handlers, logs, ctx } = deadEndHarness();
+  ctx.model = { provider: "router", id: "sol" };
+  handlers.get("agent_end")({
+    messages: [{ ...STREAM_FAILED, errorMessage: "400 context_length_exceeded: maximum context length is 1050000" }],
+  }, ctx);
+  assert.equal(logs.filter((l) => l.includes("taking over")).length, 0);
+  assert.equal(
+    handlers.get("agent_before_settle")({ outcome: "error", entries: [], context: { canContinue: true } }),
+    undefined,
+  );
+});
+
+test("an unknown failure does not take over", () => {
+  const { handlers, logs, ctx } = deadEndHarness();
+  ctx.model = { provider: "router", id: "sol" };
+  handlers.get("agent_end")({ messages: [{ ...STREAM_FAILED, errorMessage: "weird sandbox thing" }] }, ctx);
+  assert.equal(logs.filter((l) => l.includes("taking over")).length, 0);
+});
+
+test("takeover stops at the continuation budget instead of looping", () => {
+  const { registered, handlers, logs, ctx } = deadEndHarness();
+  ctx.model = { provider: "router", id: "sol" };
+  const cheap = registered.find((r) => r.id === "sol");
+  for (let i = 0; i < 5; i += 1) {
+    handlers.get("agent_end")({ messages: [STREAM_FAILED] }, ctx);
+    handlers.get("agent_before_settle")({ outcome: "error", entries: [], context: { canContinue: true } });
+    cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
+  }
+  assert.equal(logs.filter((l) => l.includes("taking over")).length, MAX_FORCED_CONTINUATIONS);
+});
+
+test("a boundary that refuses continuation does not lose the rotation", () => {
+  const { registered, handlers, logs, ctx } = deadEndHarness();
+  ctx.model = { provider: "router", id: "sol" };
+  const cheap = registered.find((r) => r.id === "sol");
+  handlers.get("agent_end")({ messages: [STREAM_FAILED] }, ctx);
+  const settle = handlers.get("agent_before_settle")({
+    outcome: "error",
+    entries: [],
+    context: { canContinue: false },
+  });
+  assert.equal(settle, undefined);
+  assert.match(logs.join("\n"), /will not continue automatically/);
+  // The next user request still benefits from the rotation.
+  const next = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(next.model.provider, "subrouter-000");
 });
 
 test("a missing config file registers nothing and does not throw", () => {

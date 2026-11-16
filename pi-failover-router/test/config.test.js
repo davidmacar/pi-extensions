@@ -72,6 +72,39 @@ test("parseConfig rejects duplicate provider/id pairs", () => {
   assert.throws(() => parseConfig({ virtuals: [PLAUSIBLE, PLAUSIBLE] }), /duplicate virtual model/);
 });
 
+test("carries the physical limits and input types through", () => {
+  const v = normalizeVirtual({
+    ...PLAUSIBLE,
+    contextWindow: 1050000,
+    maxTokens: 128000,
+    input: ["text", "image"],
+  });
+  assert.equal(v.contextWindow, 1050000);
+  assert.equal(v.maxTokens, 128000);
+  assert.deepEqual(v.input, ["text", "image"]);
+});
+
+test("rejects limits that are not positive integers", () => {
+  assert.throws(() => normalizeVirtual({ ...PLAUSIBLE, contextWindow: 0 }), /contextWindow/);
+  assert.throws(() => normalizeVirtual({ ...PLAUSIBLE, maxTokens: -1 }), /maxTokens/);
+  assert.throws(() => normalizeVirtual({ ...PLAUSIBLE, contextWindow: 1.5 }), /contextWindow/);
+});
+
+test("rejects unknown or empty input types", () => {
+  assert.throws(() => normalizeVirtual({ ...PLAUSIBLE, input: ["audio"] }), /input/);
+  assert.throws(() => normalizeVirtual({ ...PLAUSIBLE, input: [] }), /input/);
+});
+
+test("order accepts cost and speed and defaults to the configured chain order", () => {
+  assert.equal(normalizeVirtual({ ...PLAUSIBLE, order: "speed" }).order, "speed");
+  assert.equal(normalizeVirtual({ ...PLAUSIBLE, order: "cost" }).order, "cost");
+  assert.equal(normalizeVirtual(PLAUSIBLE).order, undefined);
+});
+
+test("order rejects anything else", () => {
+  assert.throws(() => normalizeVirtual({ ...PLAUSIBLE, order: "fastest" }), /order must be/);
+});
+
 test("parseConfig rejects a document without virtuals", () => {
   assert.throws(() => parseConfig({}), ConfigError);
   assert.throws(() => parseConfig({ virtuals: [] }), /must not be empty/);
