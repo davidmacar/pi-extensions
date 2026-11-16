@@ -36,9 +36,13 @@ cannot tell, because it only reads the label. This extension reads the raw messa
   neither `upstream_stream_read_error` nor `http/?2 stream failed` — ends the run before
   `route()` is ever asked with `reason: "retry"`. On `agent_end` the router picks the next
   channel, and on `agent_before_settle` it appends a marker entry and asks for one more
-  request, so the retry happens on the next channel. Bounded by
-  `MAX_FORCED_CONTINUATIONS` (3) per session so it can never loop;
-- puts the failed model in **cooldown** (30 min for quota/auth, 2 min otherwise);
+  request, so the retry happens on the next channel. There is no rotation budget:
+  what limits it is the cooldown, which always expires;
+- puts the failed model in **cooldown**, doubling with each consecutive failure of the same
+  channel: 2 → 4 → 8 → 16 → 30 min for transient failures, from 30 min up to 2 hours for
+  quota/auth. A channel that answers correctly starts over at the base value. Nothing is
+  remembered beyond the cooldown, so a long working session never locks a channel out: it
+  comes back by itself;
 - keeps the model that failed when it will not rotate, so you see the real error instead
   of a silently different channel.
 

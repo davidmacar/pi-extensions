@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { readFileSync, writeFileSync } from "node:fs";
-import failoverRouter, { MAX_FORCED_CONTINUATIONS, MEASURE_WAIT_MS } from "../index.js";
+import failoverRouter, { MEASURE_WAIT_MS, noteFailure } from "../index.js";
 
 /** Minimal fake ExtensionAPI + model registry that records routing decisions. */
 function harness({ config, catalog }) {
@@ -443,16 +443,75 @@ test("an unknown failure does not take over", () => {
   assert.equal(logs.filter((l) => l.includes("taking over")).length, 0);
 });
 
-test("takeover stops at the continuation budget instead of looping", () => {
-  const { registered, handlers, logs, ctx } = deadEndHarness();
+test("takeover keeps going until every channel of the chain has been tried", () => {
+  // Four channels, like the real sol chain: the takeover must reach the fourth
+  // instead of stopping at a fixed budget, then refuse because all are cooling.
+  const fourChannel = {
+    virtuals: [
+      {
+        provider: "router",
+        id: "sol",
+        name: "Sol barato",
+        thinkingLevels: ["high"],
+        chain: [
+          { model: "subrouter-best/gpt-6.1-sol" },
+          { model: "subrouter-000/gpt-6.1-sol" },
+          { model: "subrouter-fxpayback/gpt-6.1-sol" },
+          { model: "subrouter-xcgx/gpt-6.1-sol" },
+        ],
+      },
+    ],
+  };
+  const { registered, handlers, logs, ctx } = deadEndHarness({
+    cfg: fourChannel,
+    catalog: [
+      { provider: "subrouter-best", id: "gpt-6.1-sol" },
+      { provider: "subrouter-000", id: "gpt-6.1-sol" },
+      { provider: "subrouter-fxpayback", id: "gpt-6.1-sol" },
+      { provider: "subrouter-xcgx", id: "gpt-6.1-sol" },
+    ],
+  });
   ctx.model = { provider: "router", id: "sol" };
   const cheap = registered.find((r) => r.id === "sol");
-  for (let i = 0; i < 5; i += 1) {
-    handlers.get("agent_end")({ messages: [STREAM_FAILED] }, ctx);
+  const tried = [];
+  for (let i = 0; i < 6; i += 1) {
+    const out = cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
+    tried.push(out.model.provider);
+    handlers.get("agent_end")(
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: out.model.provider,
+            model: "gpt-6.1-sol",
+            stopReason: "error",
+            errorMessage: "upstream stream read failed before completion: http2: response body closed",
+          },
+        ],
+      },
+      ctx,
+    );
     handlers.get("agent_before_settle")({ outcome: "error", entries: [], context: { canContinue: true } });
-    cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
   }
-  assert.equal(logs.filter((l) => l.includes("taking over")).length, MAX_FORCED_CONTINUATIONS);
+  // All four channels are tried in order; afterwards the last one stays, because
+  // every channel is cooling down. Nothing is blocked for longer than a cooldown.
+  assert.deepEqual(tried, [
+    "subrouter-best",
+    "subrouter-000",
+    "subrouter-fxpayback",
+    "subrouter-xcgx",
+    "subrouter-xcgx",
+    "subrouter-xcgx",
+  ]);
+  assert.match(logs.join("\n"), /chain exhausted/);
+});
+
+test("a channel that keeps failing is cooled down for longer each time", () => {
+  const streaks = new Map();
+  assert.equal(noteFailure(streaks, "a/one"), 0);
+  assert.equal(noteFailure(streaks, "a/one"), 1);
+  assert.equal(noteFailure(streaks, "a/one"), 2);
+  assert.equal(streaks.get("a/one"), 3);
 });
 
 test("a boundary that refuses continuation does not lose the rotation", () => {
@@ -524,4 +583,66 @@ test("a request does not wait forever for a measurement session", async () => {
   assert.ok(elapsed < MEASURE_WAIT_MS + 1000, `routed after ${elapsed} ms`);
   assert.equal(out.model.provider, "subrouter-best", "falls back to the configured order");
   assert.match(logs.join("\n"), /routing without waiting further/);
+});
+
+test("a channel comes back by itself when its cooldown expires, without a new session", () => {
+  const { registered, handlers, ctx } = deadEndHarness();
+  ctx.model = { provider: "router", id: "sol" };
+  const cheap = registered.find((r) => r.id === "sol");
+
+  const fail = (provider) =>
+    handlers.get("agent_end")(
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider,
+            model: "gpt-6.1-sol",
+            stopReason: "error",
+            errorMessage: "upstream stream read failed before completion: http2: response body closed",
+          },
+        ],
+      },
+      ctx,
+    );
+
+  // Burn the whole two-channel chain.
+  const first = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(first.model.provider, "subrouter-best");
+  fail("subrouter-best");
+  const second = cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(second.model.provider, "subrouter-000");
+  fail("subrouter-000");
+
+  // Both are cooling down: the chain reports exhaustion.
+  const blocked = cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(blocked.model.provider, "subrouter-000", "sticky on the last used channel");
+
+  // Time passes inside the same session: no new session_start.
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 3 * 60_000;
+    const recovered = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+    assert.equal(recovered.model.provider, "subrouter-best", "the first channel is available again");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a successful response clears the channel's failure streak", async () => {
+  const { noteSuccess } = await import("../index.js");
+  const streaks = new Map([["a/one", 4]]);
+  noteSuccess(streaks, "a/one");
+  assert.equal(streaks.has("a/one"), false);
+});
+
+test("a clean run clears the streak of the channel that answered", () => {
+  const { handlers, ctx, logs } = deadEndHarness();
+  ctx.model = { provider: "router", id: "sol" };
+  // A successful end-of-run message from a physical channel.
+  handlers.get("agent_end")({
+    messages: [{ role: "assistant", provider: "subrouter-best", model: "gpt-6.1-sol", stopReason: "stop" }],
+  }, ctx);
+  // Nothing is rotated and nothing is logged for a clean run.
+  assert.equal(logs.filter((l) => l.includes("taking over")).length, 0);
 });

@@ -124,11 +124,25 @@ export function nextCandidate({ chain, failedModel, cooldowns, now }) {
   return undefined;
 }
 
+/** Ceiling for a transient channel: never further apart than this. */
+export const MAX_COOLDOWN_MS = 30 * 60_000;
+
 /**
- * Cooldown window for a kind. Exhausted credentials stay out much longer than
- * transient transport trouble.
+ * Cooldown window for a kind, doubling with each consecutive failure of the same
+ * channel. Nothing is remembered beyond the window, so a channel that failed all
+ * afternoon is still retried later instead of being blocked for the session —
+ * which matters in long working sessions.
+ *
+ * @param {string} kind classification of the failure
+ * @param {number} [streak] consecutive failures of this channel, 0 for the first
  */
-export function cooldownMs(kind) {
-  if (kind === "quota" || kind === "auth") return 30 * 60_000;
-  return 2 * 60_000;
+export function cooldownMs(kind, streak = 0) {
+  const steps = Math.max(0, Math.floor(streak));
+  if (kind === "quota" || kind === "auth") {
+    // Exhausted credentials are a billing problem: start long and double, but stop
+    // at two hours. Waiting most of a working day for a quota that may have been
+    // topped up is worse than trying again.
+    return Math.min(30 * 60_000 * 2 ** steps, 2 * 60 * 60_000);
+  }
+  return Math.min(2 * 60_000 * 2 ** steps, MAX_COOLDOWN_MS);
 }

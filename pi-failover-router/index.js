@@ -38,12 +38,27 @@ export const DEFAULT_SPEED_FILE = "failover-router-speed.json";
 /** How often an active session refreshes its measurements. */
 export const SPEED_REFRESH_MS = 15 * 60_000;
 /** How many times one virtual may force a continuation for unretryable failures. */
-export const MAX_FORCED_CONTINUATIONS = 3;
 /**
  * How long a request may wait for the measurement session before routing with
  * whatever measurements already exist. A probe must never turn into a hang.
  */
 export const MEASURE_WAIT_MS = 8_000;
+
+/**
+ * Counts one more consecutive failure for a channel.
+ * @param {Map<string, number>} streaks
+ * @param {string} model
+ */
+export function noteFailure(streaks, model) {
+  const streak = streaks.get(model) ?? 0;
+  streaks.set(model, streak + 1);
+  return streak;
+}
+
+/** Clears a channel's failure history, because it just answered correctly. */
+export function noteSuccess(streaks, model) {
+  streaks.delete(model);
+}
 
 /** @param {string} path */
 function expandHome(path) {
@@ -86,8 +101,13 @@ export default function failoverRouter(pi) {
    * Pi refuses to retry ends the run. Cleared as soon as it is used.
    */
   const forcedNext = new Map();
-  /** Forced continuations this session, so a dead end can never loop forever. */
-  let forcedCount = 0;
+  /**
+   * `${provider}/${id}` -> consecutive failures. Drives the cooldown backoff, so a
+   * channel that keeps failing is tried further and further apart. Nothing else
+   * limits rotations: every channel becomes available again when its cooldown
+   * expires, which is what keeps a long working session from ever being stuck.
+   */
+  const failureStreak = new Map();
 
   let virtuals = [];
   try {
@@ -127,7 +147,8 @@ export default function failoverRouter(pi) {
       );
       if (verdict.rotate) {
         const now = Date.now();
-        cooldowns.set(failedModel, now + cooldownMs(verdict.kind));
+        const streak = noteFailure(failureStreak, failedModel);
+        cooldowns.set(failedModel, now + cooldownMs(verdict.kind, streak));
         const next = nextCandidate({ chain: chainFor(def), failedModel, cooldowns, now });
         if (next) {
           const model = find(next.model);
@@ -222,7 +243,14 @@ export default function failoverRouter(pi) {
   // over here: pick the next channel on `agent_end`, then ask the boundary for one
   // more provider request. The timeout is short because it only schedules work.
   pi.on?.("agent_end", (event, ctx) => {
-    const failure = resolveDeadEnd(lastAssistantMessage(event?.messages));
+    const last = lastAssistantMessage(event?.messages);
+    const failure = resolveDeadEnd(last);
+
+    // A channel that answered correctly starts over: its next failure waits the
+    // base cooldown instead of inheriting the backoff of an earlier bad patch.
+    if (!failure && last?.stopReason !== "error" && last?.provider && last?.model) {
+      noteSuccess(failureStreak, `${last.provider}/${last.model}`);
+    }
     if (!failure || !failure.rotate) return;
     const failedModel = `${failure.provider}/${failure.id}`;
 
@@ -239,22 +267,22 @@ export default function failoverRouter(pi) {
 
     const ordered = chainFor(target);
     if (!ordered.some((step) => step.model === failedModel)) return;
-    if (forcedCount >= MAX_FORCED_CONTINUATIONS) {
-      pi.log?.(`failover-router: ${key} already forced ${forcedCount} continuations; letting the failure stand`);
-      return;
-    }
-
     const now = Date.now();
-    cooldowns.set(failedModel, now + cooldownMs(failure.kind));
+    const streak = noteFailure(failureStreak, failedModel);
+    const waitMs = cooldownMs(failure.kind, streak);
+    cooldowns.set(failedModel, now + waitMs);
     const next = nextCandidate({ chain: ordered, failedModel, cooldowns, now });
     if (!next) {
-      pi.log?.(`failover-router: ${key} chain exhausted after ${failedModel}`);
+      pi.log?.(
+        `failover-router: ${key} chain exhausted after ${failedModel} ` +
+          `(${Math.round(waitMs / 60_000)} min cooldown, attempt ${streak + 1})`,
+      );
       return;
     }
     forcedNext.set(key, next);
-    forcedCount += 1;
     pi.log?.(
-      `failover-router: ${key} taking over ${failedModel} — ${failure.kind}: ${failure.reason}; next ${next.model}`,
+      `failover-router: ${key} taking over ${failedModel} — ${failure.kind}: ${failure.reason}; ` +
+        `next ${next.model}; ${Math.round(waitMs / 60_000)} min cooldown (attempt ${streak + 1})`,
     );
   });
 
@@ -281,8 +309,8 @@ export default function failoverRouter(pi) {
   });
 
   pi.on?.("session_start", () => {
-    // A new or reloaded session starts a fresh continuation budget.
-    forcedCount = 0;
+    // A new or reloaded session starts with no remembered failures.
+    failureStreak.clear();
     forcedNext.clear();
   });
 

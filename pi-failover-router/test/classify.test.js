@@ -134,3 +134,31 @@ test("quota and auth cool down far longer than transient kinds", () => {
   assert.equal(cooldownMs("auth"), cooldownMs("quota"));
   assert.equal(cooldownMs("provider_unavailable"), 2 * 60_000);
 });
+
+test("backoff doubles the cooldown and stops at the ceiling", () => {
+  assert.equal(cooldownMs("incomplete_stream", 0), 2 * 60_000);
+  assert.equal(cooldownMs("incomplete_stream", 1), 4 * 60_000);
+  assert.equal(cooldownMs("incomplete_stream", 2), 8 * 60_000);
+  assert.equal(cooldownMs("incomplete_stream", 3), 16 * 60_000);
+  assert.equal(cooldownMs("incomplete_stream", 4), 30 * 60_000, "capped");
+  assert.equal(cooldownMs("incomplete_stream", 99), 30 * 60_000, "never above the ceiling");
+});
+
+test("backoff applies to quota and auth from their own base", () => {
+  assert.equal(cooldownMs("quota", 0), 30 * 60_000);
+  assert.equal(cooldownMs("quota", 1), 60 * 60_000);
+  assert.equal(cooldownMs("quota", 5), 2 * 60 * 60_000);
+});
+
+test("nextCandidate skips channels that are cooling down", () => {
+  const chain = [{ model: "a/one" }, { model: "b/two" }, { model: "c/three" }];
+  const cooling = new Map([
+    ["a/one", 100],
+    ["b/two", 100],
+  ]);
+  assert.deepEqual(nextCandidate({ chain, failedModel: "a/one", cooldowns: cooling, now: 50 }), { model: "c/three" });
+  // Once the cooldowns expire, a previously used channel is a candidate again:
+  // nothing is remembered for longer than its cooldown.
+  assert.deepEqual(nextCandidate({ chain, failedModel: "a/one", cooldowns: cooling, now: 200 }), { model: "b/two" });
+});
+
