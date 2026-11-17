@@ -77,21 +77,51 @@ the cheap list until a probe says otherwise.
 - Each channel is probed sequentially with a 100 token reply. Timeouts scale per channel: the first
   attempt uses the **15 s** tier, a channel that stays silent moves to the **45 s** tier, and
   the tier that worked is remembered so a slow reasoning model stops paying for the short attempt
-  on every run. The median of the last 5 samples is used, so one hung probe cannot win.
+  on every run. The **newest sample decides the order**, so a channel that starts to degrade loses
+  its place on the next measurement instead of being defended by its history. The last 5 samples
+  are kept as history; no average is taken from them.
+- **The probe never switches reasoning off.** It asks for the cheapest level the channel declares
+  in its `thinkingLevelMap`, and omits the field when the channel declares none. Probing with
+  `off` used to cost every reasoning channel a 400 and leave it permanently unmeasured.
+- **A wider tier is earned by silence, not by failure.** A channel that stays silent moves up to
+  the next tier; one that answers with an error has already said what is wrong, so it is recorded
+  with that reason and not asked again. Retrying a hard `400` on a wider tier only spent a second
+  request and hid the real error behind a timeout message.
 - **Failures are remembered.** A channel that cannot be measured is stored with its reason and
   retried on the next measurement session. Without this, a channel that always times out looks
   exactly like one that was never measured — which is how an entire family silently went unmeasured.
+- **Every attempt keeps its message.** Each channel stores the last 5 attempts, each with the time,
+  whether it succeeded, and the text that explains it: the throughput and tier for a success, the
+  provider or timeout message for a failure. A channel with no measurement can be diagnosed from
+  `~/.pi/agent/failover-router-speed.json` alone, without hunting through a session transcript.
+  The field is `attempts`; caches written before version 3 carried one `lastError` and are migrated
+  to a single failed attempt on read.
 - **Only the channels that are due are probed**: never measured, sample older than the window, or
   last attempt failed. A fresh healthy channel is not re-measured to repair its neighbours.
 - Only channels of `speed` chains are probed; the cost chains never spend a request.
 - A probe is a real request on a real channel: it costs tokens and counts toward session cost.
+
+### The Channels card in Gentle Shell
+
+The same measurements feed the rail's **Channels** card. This extension publishes one read-only
+snapshot on `pi.events`, `gentle-pi:channels-sidebar/v1`, at session start, after every
+measurement session settles, after the first request of a session, and after every rotation that
+starts a cooldown. Per physical model it carries the channel a request would use and the three
+fastest, each with the newest tokens per second and its state — `active`, `ready`, `cooldown`,
+`failed` or `unmeasured`.
+
+The card itself is a Gentle Shell section: Gentle Shell has no extension seam for a card, so it
+needs the patch in [`../patches/gentle-pi-channels`](../patches/gentle-pi-channels). Without it
+the extension publishes to no listener and nothing else changes. `node
+../patches/gentle-pi-channels/verify.mjs --print` renders the card outside Pi, and `node
+../patches/gentle-pi-channels/apply.mjs --check` says whether an upgrade removed it.
 
 ### Optional fields next to `chain`
 
 | Field | Meaning |
 | --- | --- |
 | `order` | `"cost"` (default) or `"speed"`. |
-| `thinkingLevels` | Levels offered for selection. Set the ones the physical model really supports, from its `thinkingLevelMap` in `models.json` (`"minimal": null` means unsupported). Defaults to `["low", "medium", "high"]`. |
+| `thinkingLevels` | Levels offered for selection. Only `low`, `medium`, `high`, `xhigh` and `max` are ever sent: `off` and `minimal` are refused by these providers with a 400 (`does not support reasoning effort "none"`), so listing them is a no-op and the router drops them. Set the levels the physical model really supports, from its `thinkingLevelMap` in `models.json` (`null` means unsupported). Defaults to `["low", "medium", "high"]`, which is also the fallback when nothing admissible is left. |
 | `contextWindow` / `maxTokens` | Positive integers, shown before the first response. Afterwards Pi uses the limits of the physical model that answered. |
 | `input` | Non-empty subset of `["text", "image"]`. |
 | `description` | Free text. Kept in the config for humans; Pi's virtual model entry does not surface it. |
@@ -102,9 +132,16 @@ Write it in `name` — the one field the model picker shows — or in `descripti
 reference. Session cost accounting is unaffected: assistant messages record the physical
 model, so each turn is billed at its real channel price.
 
-A step that omits `thinkingLevel` passes the level the caller selected straight through, so
-one virtual model can serve roles that think at different levels. A step that names a level
-wins over the caller's selection.
+A step that omits `thinkingLevel` passes the level the caller selected through, so one virtual
+model can serve roles that think at different levels. A step that names a level wins over the
+caller's selection.
+
+Whatever is selected, only a level the resolved channel accepts is sent. `off` and `minimal` are
+never sent, and a level the channel marks `null` in its `thinkingLevelMap` is replaced by the
+nearest level it does support — `off` lands on `low`, `max` degrades to the highest available.
+When a channel supports no level at all, the field is omitted rather than sent. A mapping in
+`models.json` that claims a level works is still treated as a hint, not a guarantee: the router
+only trusts the five levels these providers accept.
 
 ## Install
 

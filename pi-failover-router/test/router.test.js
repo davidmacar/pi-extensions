@@ -6,6 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import failoverRouter, { MEASURE_WAIT_MS, noteFailure } from "../index.js";
 
+// A test run must never append to the user's real decision log: that file is the
+// record a later diagnosis reads, and test noise buries the real decisions.
+const TEST_DECISION_LOG = join(tmpdir(), `pi-failover-router-log-test-${process.pid}.log`);
+process.env.PI_FAILOVER_ROUTER_LOG = TEST_DECISION_LOG;
+
 /** Minimal fake ExtensionAPI + model registry that records routing decisions. */
 function harness({ config, catalog }) {
   const registered = [];
@@ -54,14 +59,18 @@ const config = {
   ],
 };
 
-function boot(cfg = config) {
-  const h = harness({ config: cfg, catalog });
-  const path = join(tmpdir(), "pi-failover-router-test.json");
+function boot(cfg = config, cat = catalog) {
+  const h = harness({ config: cfg, catalog: cat });
+  const path = join(tmpdir(), `pi-failover-router-test-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(path, JSON.stringify(cfg));
+  // A test must never write into the user's real decision log.
+  const decisionLog = join(tmpdir(), `pi-failover-router-log-${process.pid}-${Math.random().toString(36).slice(2)}.log`);
   process.env.PI_FAILOVER_ROUTER_CONFIG = path;
+  process.env.PI_FAILOVER_ROUTER_LOG = decisionLog;
   failoverRouter(h.pi);
   delete process.env.PI_FAILOVER_ROUTER_CONFIG;
-  return h;
+  process.env.PI_FAILOVER_ROUTER_LOG = TEST_DECISION_LOG;
+  return { ...h, decisionLog };
 }
 
 test("registers one virtual model per configured entry", () => {
@@ -252,13 +261,16 @@ function probeHarness({ cfg, catalog, output = 20, latencyMs = () => 20 }) {
     },
   };
   const path = join(tmpdir(), `pi-failover-router-test-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  const decisionLog = join(tmpdir(), `pi-failover-router-log-${process.pid}-${Math.random().toString(36).slice(2)}.log`);
   writeFileSync(path, JSON.stringify(cfg));
   process.env.PI_FAILOVER_ROUTER_CONFIG = path;
   process.env.PI_FAILOVER_ROUTER_SPEED_CACHE = speedPath;
+  process.env.PI_FAILOVER_ROUTER_LOG = decisionLog;
   failoverRouter(pi);
   delete process.env.PI_FAILOVER_ROUTER_CONFIG;
   delete process.env.PI_FAILOVER_ROUTER_SPEED_CACHE;
-  return { registered, handlers, logs, ctx, speedPath };
+  process.env.PI_FAILOVER_ROUTER_LOG = TEST_DECISION_LOG;
+  return { registered, handlers, logs, ctx, speedPath, decisionLog };
 }
 
 /** Waits for an observable effect, so the test never depends on a fixed sleep. */
@@ -574,9 +586,9 @@ test("a probe failure is persisted, not silently dropped", async () => {
   await settle(() => logs.filter((l) => l.includes("probe reported no output tokens")).length >= 2);
   handlers.get("session_shutdown")?.();
   const persisted = JSON.parse(readFileSync(speedPath, "utf8"));
-  const failed = Object.values(persisted.channels).filter((e) => e.lastError);
+  const failed = Object.values(persisted.channels).filter((e) => e.attempts?.at(-1)?.ok === false);
   assert.equal(failed.length, 2, "both channels record why they could not be measured");
-  assert.match(failed[0].lastError.message, /no output tokens/);
+  assert.match(failed[0].attempts.at(-1).message, /no output tokens/);
 });
 
 test("a request does not wait forever for a measurement session", async () => {
@@ -697,4 +709,147 @@ test("session_start stays quiet on a virtual model", () => {
   const { fire, logs } = boot();
   fire("session_start", {}, { model: { provider: "router", id: "sol" } });
   assert.equal(logs.some((l) => l.includes("bypasses failover")), false, logs.join(" | "));
+});
+
+test("a channel-owned error Pi would abandon is made retryable", () => {
+  const { fire } = boot();
+  const [replacement] = fire("message_end", { message: http2Failure });
+  assert.ok(replacement, "expected a replacement message");
+  assert.ok(replacement.errorMessage.startsWith(http2Failure.errorMessage), replacement.errorMessage);
+  assert.match(replacement.errorMessage, /upstream_stream_read_error/);
+});
+
+test("a request-shaped error is never made retryable", () => {
+  const { fire } = boot();
+  const [replacement] = fire("message_end", {
+    message: { ...http2Failure, errorMessage: "context window exceeded: 1050000 tokens" },
+  });
+  assert.equal(replacement, undefined);
+});
+
+test("a chain with nowhere to go keeps the real error", () => {
+  const single = {
+    virtuals: [
+      {
+        provider: "router",
+        id: "solo",
+        name: "Solo",
+        thinkingLevels: ["high"],
+        chain: [{ model: "subrouter-fxpayback/gpt-6.1-sol" }],
+      },
+    ],
+  };
+  const { fire } = boot(single);
+  const [replacement] = fire("message_end", { message: http2Failure });
+  assert.equal(replacement, undefined);
+});
+
+test("a message that did not fail is left alone", () => {
+  const { fire } = boot();
+  const [replacement] = fire("message_end", {
+    message: { ...http2Failure, stopReason: "stop", errorMessage: undefined },
+  });
+  assert.equal(replacement, undefined);
+});
+
+test("a virtual never offers a level the router cannot send", () => {
+  const cfg = {
+    virtuals: [
+      {
+        provider: "router",
+        id: "sol",
+        name: "Sol failover",
+        thinkingLevels: ["off", "minimal", "high"],
+        chain: [{ model: "subrouter-best/gpt-6.1-sol" }],
+      },
+    ],
+  };
+  const { registered } = boot(cfg);
+  assert.deepEqual(registered[0].thinkingLevels, ["high"]);
+});
+
+test("a selected off is replaced by a level the channel accepts", () => {
+  const cat = [
+    {
+      provider: "subrouter-best",
+      id: "gpt-6.1-sol",
+      reasoning: true,
+      thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+    },
+  ];
+  const cfg = {
+    virtuals: [
+      {
+        provider: "router",
+        id: "sol",
+        name: "Sol failover",
+        thinkingLevels: ["high"],
+        chain: [{ model: "subrouter-best/gpt-6.1-sol" }],
+      },
+    ],
+  };
+  const { registered, ctx } = boot(cfg, cat);
+  const out = registered[0].route({ reason: "user", thinkingLevel: "off", messages: [] }, ctx);
+  assert.notEqual(out.thinkingLevel, "off");
+  assert.equal(out.thinkingLevel, "low");
+});
+
+test("a virtual whose only levels are inadmissible still offers usable ones", () => {
+  const cfg = {
+    virtuals: [
+      {
+        provider: "router",
+        id: "sol",
+        name: "Sol failover",
+        thinkingLevels: ["off", "minimal"],
+        chain: [{ model: "subrouter-best/gpt-6.1-sol" }],
+      },
+    ],
+  };
+  const { registered } = boot(cfg);
+  assert.deepEqual(registered[0].thinkingLevels, ["low", "medium", "high"]);
+});
+
+test("an inadmissible level in the config is reported, not dropped silently", () => {
+  const cfg = {
+    virtuals: [
+      {
+        provider: "router",
+        id: "sol",
+        name: "Sol failover",
+        thinkingLevels: ["off", "high"],
+        chain: [{ model: "subrouter-best/gpt-6.1-sol" }],
+      },
+    ],
+  };
+  const { registered, logs } = boot(cfg);
+  assert.deepEqual(registered[0].thinkingLevels, ["high"]);
+  assert.equal(
+    logs.some((m) => /off/.test(m) && /ignor/i.test(m)),
+    true,
+    "the user must learn that off was dropped from the config",
+  );
+});
+
+test("the probe writes its messages to the decision log, not only to pi.log", async () => {
+  const { handlers, ctx, decisionLog } = probeHarness({
+    cfg: speedConfig,
+    catalog: FAST_CATALOG,
+    latencyMs: () => 5,
+  });
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+  await settle(() => {
+    try {
+      return readFileSync(decisionLog, "utf8").includes("speed probe");
+    } catch {
+      return false;
+    }
+  });
+  handlers.get("session_shutdown")?.();
+  const written = readFileSync(decisionLog, "utf8");
+  assert.match(
+    written,
+    /speed probe .*tok\/s/,
+    "a measurement must leave a durable record of what it measured",
+  );
 });

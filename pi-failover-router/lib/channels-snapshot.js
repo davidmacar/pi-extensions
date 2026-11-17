@@ -1,0 +1,181 @@
+/**
+ * The channel snapshot Gentle Shell paints in its Channels card.
+ *
+ * The router is the only component that knows how fast a channel is, which one
+ * a model would use right now, and which ones are sitting out a cooldown. It
+ * publishes that as one small, validated, read-only object; the shell never
+ * reads this extension's files and never decides anything itself. Keeping the
+ * builder pure is what lets the card's content be tested without a terminal, a
+ * provider or a live session.
+ */
+
+import { orderBySpeed } from "./speed-order.js";
+import { tokensPerSecond } from "./speed-cache.js";
+
+/** The shape a consumer validates before painting it. */
+export const CHANNELS_SNAPSHOT_SCHEMA = "gentle-pi.channels-sidebar/v1";
+/**
+ * Event channel Gentle Shell listens on. The consumer lives in the installed
+ * gentle-ai package; this module only names the contract.
+ */
+export const CHANNELS_SNAPSHOT_EVENT = "gentle-pi:channels-sidebar/v1";
+
+/** Shared contract limit: the card shows the fastest three channels of each model. */
+export const CHANNELS_SHOWN = 3;
+
+const providerOf = (ref) => ref.slice(0, Math.max(0, ref.indexOf("/")));
+const modelOf = (ref) => ref.slice(ref.indexOf("/") + 1);
+
+/**
+ * A channel name the rail can show in a narrow column: the provider without the
+ * `subrouter-` prefix these catalogs share, so `subrouter-fxpayback` reads as
+ * `fxpayback` and the tokens per second keep their room.
+ */
+function channelName(ref) {
+  const provider = providerOf(ref);
+  return provider.startsWith("subrouter-") ? provider.slice("subrouter-".length) : provider;
+}
+
+/** The last recorded attempt, or undefined when the channel was never probed. */
+function lastAttempt(entry) {
+  return Array.isArray(entry?.attempts) && entry.attempts.length > 0 ? entry.attempts[entry.attempts.length - 1] : undefined;
+}
+
+/**
+ * One model family, its channels ranked fastest first, and which one is chosen.
+ * A family appears once however many virtual models share it: `sol-barato` and
+ * `sol-rapido` are the same two channels in a different order.
+ */
+function describeModel({ model, refs, speedCache, cooldowns, now, activeRef, top }) {
+  const steps = refs.map((ref) => ({ model: ref }));
+  const ranked = orderBySpeed(steps, speedCache, tokensPerSecond).map((step) => step.model);
+  const described = ranked.map((ref) => {
+    const entry = speedCache?.channels?.[ref];
+    const speed = tokensPerSecond(speedCache, ref);
+    const attempt = lastAttempt(entry);
+    const until = cooldowns.get(ref);
+    const cooling = typeof until === "number" && until > now;
+    // `active` is decided below, once the chosen channel is known: a channel
+    // that is cooling down or whose probe fails says so even if it was routed last.
+    const state = cooling
+      ? "cooldown"
+      : attempt && attempt.ok === false
+        ? "failed"
+        : typeof speed === "number"
+          ? "ready"
+          : "unmeasured";
+    return {
+      ref,
+      channel: channelName(ref),
+      state,
+      tokensPerSecond: typeof speed === "number" ? speed : null,
+      measuredAt: typeof entry?.measuredAt === "number" ? entry.measuredAt : null,
+      ...(cooling ? { cooldownMs: until - now } : {}),
+      ...(state === "failed" && typeof attempt?.message === "string" ? { note: attempt.message } : {}),
+    };
+  });
+  // The routed channel keeps the card honest only while it is usable; otherwise
+  // the chosen one is the fastest available, and a chain where everything is
+  // cooling or failing still names its first candidate.
+  const usable = (channel) => channel.state !== "cooldown" && channel.state !== "failed";
+  const routed = described.find((channel) => channel.ref === activeRef && usable(channel));
+  const chosen = routed ?? described.find(usable) ?? described[0];
+  if (chosen && usable(chosen)) chosen.state = "active";
+  const shown = described.slice(0, top);
+  return {
+    model,
+    active: chosen ? chosen.channel : null,
+    total: described.length,
+    hidden: Math.max(0, described.length - shown.length),
+    channels: shown,
+  };
+}
+
+/**
+ * Builds the snapshot the Channels card paints.
+ *
+ * @param {object} input
+ * @param {Array<{provider: string, id: string, chain: Array<{model: string}>}>} input.virtuals
+ * @param {object} input.speedCache
+ * @param {Map<string, number>} input.cooldowns channel ref -> epoch ms it becomes usable
+ * @param {Map<string, string>} input.lastRouted virtual key -> channel ref routed last
+ * @param {number} input.now
+ * @param {number} [input.top]
+ * @param {Function} [input.tokensPerSecond] injected for tests
+ * @param {Function} [input.orderBySpeed] injected for tests
+ */
+export function buildChannelsSnapshot({
+  virtuals,
+  speedCache,
+  cooldowns = new Map(),
+  lastRouted = new Map(),
+  now,
+  top = CHANNELS_SHOWN,
+  tokensPerSecond: speedOf = tokensPerSecond,
+  orderBySpeed: rank = orderBySpeed,
+}) {
+  // Family order follows the configuration, so the card is stable between
+  // measurements instead of reshuffling by whichever probe finished last.
+  const families = new Map();
+  for (const def of virtuals) {
+    const key = `${def.provider}/${def.id}`;
+    for (const step of def.chain) {
+      const model = modelOf(step.model);
+      const family = families.get(model) ?? { model, refs: [], virtualKeys: [] };
+      if (!family.virtualKeys.includes(key)) family.virtualKeys.push(key);
+      if (!family.refs.includes(step.model)) family.refs.push(step.model);
+      families.set(model, family);
+    }
+  }
+
+  const channels = speedCache?.channels ?? {};
+  const models = [];
+  for (const family of families.values()) {
+    // Only a real route is handed over; which channel falls back to being
+    // chosen depends on cooldowns, and that decision belongs to describeModel.
+    const routed = family.virtualKeys.map((key) => lastRouted.get(key)).find((ref) => typeof ref === "string");
+    const activeRef = routed && family.refs.includes(routed) ? routed : undefined;
+    models.push(
+      describeModel({
+        model: family.model,
+        refs: family.refs,
+        speedCache,
+        cooldowns,
+        now,
+        activeRef,
+        top,
+      }),
+    );
+  }
+
+  const measuredAt = models
+    .flatMap((model) => model.channels.map((channel) => channel.measuredAt))
+    .filter((at) => typeof at === "number")
+    .reduce((newest, at) => (newest === null || at > newest ? at : newest), null);
+
+  return { schema: CHANNELS_SNAPSHOT_SCHEMA, measuredAt, models };
+}
+
+/**
+ * True when the payload is a snapshot this consumer may paint: bounded, typed,
+ * and free of the properties a rail row would have to trust blindly.
+ */
+export function isChannelsSnapshot(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value.schema !== CHANNELS_SNAPSHOT_SCHEMA) return false;
+  if (!Array.isArray(value.models) || value.models.length > 16) return false;
+  return value.models.every((model) => {
+    if (!model || typeof model !== "object") return false;
+    if (typeof model.model !== "string" || model.model.length === 0) return false;
+    if (!Array.isArray(model.channels) || model.channels.length === 0 || model.channels.length > CHANNELS_SHOWN) return false;
+    return model.channels.every(
+      (channel) =>
+        channel &&
+        typeof channel === "object" &&
+        typeof channel.channel === "string" &&
+        channel.channel.length > 0 &&
+        (channel.tokensPerSecond === null || typeof channel.tokensPerSecond === "number") &&
+        ["active", "ready", "cooldown", "failed", "unmeasured"].includes(channel.state),
+    );
+  });
+}

@@ -11,6 +11,7 @@
  * reasoning models whose throughput is worth measuring.
  */
 import { PROBE_TIMEOUT_TIERS_MS } from "./speed-cache.js";
+import { supportedLevels } from "./thinking-level.js";
 
 export { PROBE_TIMEOUT_TIERS_MS };
 
@@ -81,6 +82,20 @@ export function describeResponse(message) {
   return parts.join("; ");
 }
 
+/** The message the probe budget aborts with when a channel stays silent. */
+const SILENCE = /no answer within/;
+
+/**
+ * Distinguishes a channel that stayed silent from one that answered with an
+ * error. Only silence has earned a wider tier.
+ *
+ * @param {unknown} error
+ */
+function isSilenceTimeout(error) {
+  const text = error instanceof Error ? error.message : String(error);
+  return SILENCE.test(text);
+}
+
 /**
  * @param {object} args
  * @param {{provider: string, id: string}} args.model
@@ -88,17 +103,22 @@ export function describeResponse(message) {
  * @param {object} args.requestModel the model object Pi resolves from the registry
  * @param {() => number} [args.now]
  * @param {object} [args.budget] a created budget; one is made when omitted
+ * @param {string} [args.thinkingLevel] level to send; derived from the model when omitted
  * @returns {Promise<{tokensPerSecond: number, outputTokens: number, elapsedMs: number}>}
  */
-export async function measureChannel({ model, complete, requestModel, now = Date.now, budget }) {
+export async function measureChannel({ model, complete, requestModel, now = Date.now, budget, thinkingLevel }) {
   const active = budget ?? createProbeBudget({ now });
+  // Never ask a channel to switch reasoning off: a channel that refuses the
+  // effort answers 400 and the measurement is lost. The cheapest level the model
+  // declares is used instead, and no level at all when it declares none.
+  const level = thinkingLevel ?? supportedLevels(requestModel)[0];
   const startedAt = now();
   let message;
   try {
     message = await complete(
       requestModel,
       { messages: [{ role: "user", content: [{ type: "text", text: PROBE_PROMPT }] }] },
-      { maxTokens: PROBE_MAX_TOKENS, thinkingLevel: "off", signal: active.signal },
+      { maxTokens: PROBE_MAX_TOKENS, ...(level ? { thinkingLevel: level } : {}), signal: active.signal },
     );
   } finally {
     active.stop();
@@ -139,6 +159,8 @@ export async function measureChannel({ model, complete, requestModel, now = Date
  * @param {(message: string) => void} [args.log]
  * @param {() => number} [args.now]
  * @param {number} [args.timeoutMs] total budget per channel
+ * @param {number} [args.wideMs] silence floor for the widest tier; injectable so a
+ *   test does not have to wait the real 99 s to prove the last tier is reached
  * @returns {Promise<{measured: Array<{ref: string, tokensPerSecond: number}>, failed: Array<{ref: string, message: string}>}>}
  */
 export async function probeChannels({
@@ -148,6 +170,7 @@ export async function probeChannels({
   log,
   now = Date.now,
   tiers = PROBE_TIMEOUT_TIERS_MS,
+  wideMs = PROBE_FIRST_TOKEN_WIDE_MS,
   startingTierFor = () => tiers[0],
 }) {
   const measured = [];
@@ -180,7 +203,7 @@ export async function probeChannels({
           budget: createProbeBudget({
             // The tier *is* the silence budget: a channel that answers inside its
             // tier passes, one that stays silent moves up.
-            firstTokenMs: lastTier ? Math.max(PROBE_FIRST_TOKEN_WIDE_MS, tiers[attempt]) : tiers[attempt],
+            firstTokenMs: lastTier ? Math.max(wideMs, tiers[attempt]) : tiers[attempt],
             now,
           }),
         });
@@ -191,17 +214,33 @@ export async function probeChannels({
         break;
       } catch (error) {
         lastMessage = error instanceof Error ? error.message : String(error);
+        // A channel that stayed silent has earned a wider tier. A channel that
+        // answered with an error has already said what is wrong: asking again on a
+        // wider tier only spends another request and hides the real reason behind
+        // a timeout message.
+        if (!isSilenceTimeout(error)) {
+          log?.(`failover-router: ${ref} not retried on a wider tier: ${lastMessage}`);
+          break;
+        }
         if (attempt === tiers.length - 1) break;
         log?.(`failover-router: ${ref} timed out at ${tiers[attempt] / 1000}s; retrying with the next tier`);
       }
     }
 
     if (result) {
-      measured.push({ ref, tokensPerSecond: result.tokensPerSecond, timeoutTierMs: result.timeoutTierMs });
-      log?.(
-        `failover-router: speed probe ${ref} ${result.tokensPerSecond.toFixed(1)} tok/s ` +
-          `(${result.outputTokens} tokens in ${result.elapsedMs} ms, ${result.timeoutTierMs / 1000}s tier)`,
-      );
+      // One text for both channels: the log line and the attempt stored in the
+      // cache. A channel with no measurement has to be diagnosable from the cache
+      // alone, so the successful attempts need their detail too.
+      const message =
+        `${result.tokensPerSecond.toFixed(1)} tok/s ` +
+        `(${result.outputTokens} tokens in ${result.elapsedMs} ms, ${result.timeoutTierMs / 1000}s tier)`;
+      measured.push({
+        ref,
+        tokensPerSecond: result.tokensPerSecond,
+        timeoutTierMs: result.timeoutTierMs,
+        message,
+      });
+      log?.(`failover-router: speed probe ${ref} ${message}`);
     } else {
       failed.push({ ref, message: lastMessage });
       log?.(`failover-router: speed probe failed for ${ref}: ${lastMessage}`);

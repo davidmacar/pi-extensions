@@ -15,10 +15,17 @@
  * refreshed every 15 minutes while a session is active; consecutive sessions
  * share the measurement through a cache file.
  */
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { classifyFailure, cooldownMs, nextCandidate } from "./lib/classify.js";
+import { createDecisionLog } from "./lib/decision-log.js";
+import { buildChannelsSnapshot, CHANNELS_SNAPSHOT_EVENT } from "./lib/channels-snapshot.js";
+import { decidePatchAction } from "./lib/patch-guard.js";
+import { retryableErrorText } from "./lib/retry-bridge.js";
+import { DEFAULT_LEVELS, isAdmissible, resolveLevel } from "./lib/thinking-level.js";
 import { ConfigError, loadRouterConfig } from "./lib/config.js";
 import {
   dueRefs,
@@ -37,12 +44,18 @@ export const DEFAULT_CONFIG_FILE = "failover-router.json";
 export const DEFAULT_SPEED_FILE = "failover-router-speed.json";
 /** How often an active session refreshes its measurements. */
 export const SPEED_REFRESH_MS = 15 * 60_000;
-/** How many times one virtual may force a continuation for unretryable failures. */
 /**
  * How long a request may wait for the measurement session before routing with
  * whatever measurements already exist. A probe must never turn into a hang.
  */
 export const MEASURE_WAIT_MS = 8_000;
+/**
+ * Repair script for the Gentle Shell Channels card. The card cannot be an
+ * extension (the shell renders a closed section list), so it lives inside the
+ * installed `gentle-pi` package and a package update removes it. Pi documents no
+ * integrity check for installed packages, so the card re-installs itself here.
+ */
+export const PATCH_GUARD_SCRIPT = fileURLToPath(new URL("../patches/gentle-pi-channels/apply.mjs", import.meta.url));
 
 /**
  * Counts one more consecutive failure for a channel.
@@ -69,14 +82,29 @@ function expandHome(path) {
 
 /**
  * A chain step may pin its own thinking level; when it does not, the level the
- * caller selected carries through unchanged, so a profile can choose `max` for
- * one role and `high` for another over the same channel chain.
+ * caller selected carries through, so a profile can choose `max` for one role
+ * and `high` for another over the same channel chain.
+ *
+ * Whatever the caller asked for, only a level the resolved model accepts is
+ * sent: `off` and `minimal` are refused with a 400 by these channels, and a
+ * level the catalog marks `null` is equally unsupported. Nothing is sent when
+ * the model supports no admissible level at all.
  *
  * @param {object} model
  * @param {string|undefined} thinkingLevel
  */
 function withLevel(model, thinkingLevel) {
-  return thinkingLevel ? { model, thinkingLevel } : { model };
+  const level = resolveLevel(model, thinkingLevel);
+  return level ? { model, thinkingLevel: level } : { model };
+}
+
+/**
+ * @param {string[]|undefined} configured
+ * @returns {string[]}
+ */
+function offeredLevels(configured) {
+  const admissible = (configured ?? []).filter(isAdmissible);
+  return admissible.length > 0 ? admissible : [...DEFAULT_LEVELS];
 }
 
 /**
@@ -109,17 +137,45 @@ export default function failoverRouter(pi) {
    */
   const failureStreak = new Map();
 
+  // `pi.log` is not part of Pi's documented extension API, so it may be a no-op.
+  // The file is therefore the durable channel: every decision goes to both.
+  const decisionLog = createDecisionLog({
+    path: process.env.PI_FAILOVER_ROUTER_LOG ?? join(homedir(), ".pi", "agent", "failover-router.log"),
+  });
+  const log = (message) => {
+    pi.log?.(message);
+    decisionLog(message);
+  };
+
   let virtuals = [];
   try {
     virtuals = loadRouterConfig(configPath);
   } catch (error) {
     const message = error instanceof ConfigError ? error.message : String(error?.message ?? error);
-    pi.log?.(`failover-router: config not loaded: ${message}`);
+    log(`failover-router: config not loaded: ${message}`);
     return;
   }
   if (virtuals.length === 0) return;
 
   speedCache = readSpeedCache(speedPath, { readFile: readFileSync }) ?? emptyCache();
+
+  /**
+   * Publishes the snapshot the Channels card paints: what routing already knows,
+   * in one read-only object. The listener is another extension's code, so a throw
+   * there is contained: showing the card must never change a routing decision.
+   */
+  const publishChannels = () => {
+    try {
+      pi.events?.emit?.(
+        CHANNELS_SNAPSHOT_EVENT,
+        buildChannelsSnapshot({ virtuals, speedCache, cooldowns, lastRouted, now: Date.now() }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`failover-router: could not publish the channel snapshot: ${message}`);
+    }
+  };
+  publishChannels();
 
   /**
    * Orders one chain for this request. `speed` chains put measured channels first,
@@ -162,7 +218,7 @@ export default function failoverRouter(pi) {
       const failedModel = `${request.failed.model?.provider}/${request.failed.model?.id}`;
       const errorMessage = request.failed.message?.errorMessage;
       const verdict = classifyFailure(errorMessage);
-      pi.log?.(
+      log(
         `failover-router: ${key} retry after ${failedModel} — ${verdict.kind}: ${verdict.reason}` +
           (verdict.rotate ? "" : " (not rotating)"),
       );
@@ -170,6 +226,9 @@ export default function failoverRouter(pi) {
         const now = Date.now();
         const streak = noteFailure(failureStreak, failedModel);
         cooldowns.set(failedModel, now + cooldownMs(verdict.kind, streak));
+        // The card shows the cooldown that just started, without waiting for the
+        // next measurement to repaint the rail.
+        publishChannels();
         const next = nextCandidate({ chain: chainFor(def), failedModel, cooldowns, now });
         if (next) {
           const model = find(next.model);
@@ -177,15 +236,18 @@ export default function failoverRouter(pi) {
             lastRouted.set(key, next.model);
             return withLevel(model, next.thinkingLevel ?? request.thinkingLevel);
           }
-          pi.log?.(`failover-router: ${next.model} is not in the catalog; falling through`);
+          log(`failover-router: ${next.model} is not in the catalog; falling through`);
         } else {
-          pi.log?.(`failover-router: ${key} chain exhausted`);
+          log(`failover-router: ${key} chain exhausted`);
         }
       }
       // Not rotating, or nowhere to go: keep the model that failed so the
       // human sees the real error rather than a silently different channel.
       const same = request.failed.model;
-      if (same) return { model: same, thinkingLevel: request.failed.thinkingLevel };
+      if (same) {
+        const level = resolveLevel(find(same.provider + "/" + same.id) ?? same, request.failed.thinkingLevel);
+        return level ? { model: same, thinkingLevel: level } : { model: same };
+      }
     }
 
     // A dead end that Pi would not retry leaves a channel to use next. It wins
@@ -196,10 +258,10 @@ export default function failoverRouter(pi) {
       const model = find(forced.model);
       if (model) {
         lastRouted.set(key, forced.model);
-        pi.log?.(`failover-router: ${key} continuing on ${forced.model} after an unretryable failure`);
+        log(`failover-router: ${key} continuing on ${forced.model} after an unretryable failure`);
         return withLevel(model, forced.thinkingLevel ?? request.thinkingLevel);
       }
-      pi.log?.(`failover-router: ${forced.model} is not in the catalog; ignoring the rotation`);
+      log(`failover-router: ${forced.model} is not in the catalog; ignoring the rotation`);
     }
 
     // Everything else sticks to the model that last answered successfully,
@@ -216,19 +278,37 @@ export default function failoverRouter(pi) {
     return withLevel(first, ordered[0].thinkingLevel ?? request.thinkingLevel);
   };
 
+  /** One initial publish per session, so a late-loading shell is never empty. */
+  let published = false;
+
   for (const def of virtuals) {
     const key = `${def.provider}/${def.id}`;
+    // A level the providers refuse is dropped, but never silently: a configuration
+    // that still lists it would otherwise look accepted and behave differently.
+    const dropped = (def.thinkingLevels ?? []).filter((level) => !isAdmissible(level));
+    if (dropped.length > 0) {
+      log(`failover-router: ${key} ignores thinking level(s) ${dropped.join(", ")}: providers refuse them`);
+    }
 
     pi.registerVirtualModel({
       provider: def.provider,
       id: def.id,
       name: def.name,
-      thinkingLevels: def.thinkingLevels,
+      // Only levels the router may actually send are offered: listing `off` let a
+      // selection reach a channel that answers it with a 400. A configuration
+      // that leaves nothing usable still has to offer something selectable.
+      thinkingLevels: offeredLevels(def.thinkingLevels),
       description: def.description,
       contextWindow: def.contextWindow,
       maxTokens: def.maxTokens,
       input: def.input,
       route(request, ctx) {
+        // A shell that loaded after this extension still needs the snapshot; the
+        // first request of the session is the earliest moment both are live.
+        if (!published) {
+          published = true;
+          publishChannels();
+        }
         // The measurement session starts with the session and runs before the
         // first request. Waiting for it here is what makes that first request
         // already use measured throughput — but only up to a budget, because a
@@ -247,17 +327,44 @@ export default function failoverRouter(pi) {
         ]);
         return ready.then((settled) => {
           if (!settled) {
-            pi.log?.(`failover-router: ${key} routing without waiting further for measurements`);
+            log(`failover-router: ${key} routing without waiting further for measurements`);
           }
           return decideRoute(def, key, request, ctx);
         });
       },
     });
 
-    pi.log?.(`failover-router: registered ${key} (${def.chain.length} candidates)`);
+    log(`failover-router: registered ${key} (${def.chain.length} candidates)`);
   }
 
   // ---- failures Pi refuses to retry -------------------------------------------
+  // A channel-owned failure that Pi's own allow-list does not recognise would end
+  // the run before `route()` is ever asked with `reason: "retry"`. Annotating the
+  // error at `message_end` puts it on that list, so Pi retries through its normal
+  // path and the chain rotates in `decideRoute`, the path the tests already cover.
+  pi.on?.("message_end", (event) => {
+    const message = event?.message;
+    if (message?.role !== "assistant" || message.stopReason !== "error") return undefined;
+    const failedModel = `${message.provider}/${message.model}`;
+    const verdict = classifyFailure(message.errorMessage);
+    if (!verdict.rotate) return undefined;
+
+    // Only when the chain can actually go somewhere: rewriting the error while
+    // every other channel cools would retry the same broken channel.
+    const target = virtuals.find((def) => def.chain.some((step) => step.model === failedModel));
+    if (!target) return undefined;
+    const next = nextCandidate({ chain: chainFor(target), failedModel, cooldowns, now: Date.now() });
+    if (!next) return undefined;
+
+    const errorMessage = retryableErrorText(message.errorMessage);
+    if (!errorMessage) return undefined;
+    log(
+      `failover-router: ${virtualKey(target)} making ${failedModel} retryable — ${verdict.kind}: ` +
+        `${verdict.reason}; next ${next.model}`,
+    );
+    return { ...message, errorMessage };
+  });
+
   // Pi ends the run without a retry when `isRetryableAssistantError` does not
   // recognise the message, so `route()` is never asked with `reason: "retry"`.
   // Those failures are exactly the ones this extension exists for, so take them
@@ -285,7 +392,7 @@ export default function failoverRouter(pi) {
     // that never reaches a request.
     const bypass = bypassReport(selected);
     if (bypass) {
-      pi.log?.(bypass);
+      log(bypass);
       return;
     }
     const target = selectedKey
@@ -302,14 +409,14 @@ export default function failoverRouter(pi) {
     cooldowns.set(failedModel, now + waitMs);
     const next = nextCandidate({ chain: ordered, failedModel, cooldowns, now });
     if (!next) {
-      pi.log?.(
+      log(
         `failover-router: ${key} chain exhausted after ${failedModel} ` +
           `(${Math.round(waitMs / 60_000)} min cooldown, attempt ${streak + 1})`,
       );
       return;
     }
     forcedNext.set(key, next);
-    pi.log?.(
+    log(
       `failover-router: ${key} taking over ${failedModel} — ${failure.kind}: ${failure.reason}; ` +
         `next ${next.model}; ${Math.round(waitMs / 60_000)} min cooldown (attempt ${streak + 1})`,
     );
@@ -321,7 +428,7 @@ export default function failoverRouter(pi) {
       // The boundary refuses a bare continuation after an error; the marker keeps
       // the decision visible and the next user message still benefits from the
       // rotation, because route() consumes it.
-      pi.log?.("failover-router: rotation recorded; Pi will not continue automatically");
+      log("failover-router: rotation recorded; Pi will not continue automatically");
       return undefined;
     }
     return {
@@ -341,8 +448,67 @@ export default function failoverRouter(pi) {
     // A new or reloaded session starts with no remembered failures.
     failureStreak.clear();
     forcedNext.clear();
+    published = false;
     const bypass = bypassReport(ctx?.model);
-    if (bypass) pi.log?.(bypass);
+    if (bypass) log(bypass);
+  });
+
+  /**
+   * Keeps the Channels card installed. Pi documents no integrity check for
+   * installed packages, so nothing else notices when an update removes it: the
+   * rail would just paint one section fewer. The check is one short child
+   * process per session and says nothing when the card is there.
+   */
+  const notifyQuietly = (ctx, message, level) => {
+    log(message);
+    try {
+      ctx?.ui?.notify?.(message, level);
+    } catch {
+      // A notification is a courtesy; it never breaks a session start.
+    }
+  };
+  let patchGuardStarted = false;
+  const guardChannelsCard = (ctx) => {
+    if (patchGuardStarted) return;
+    patchGuardStarted = true;
+    // The one documented way out: no patch directory, nothing to keep alive.
+    if (process.env.PI_FAILOVER_ROUTER_NO_PATCHER === "1") return;
+    if (!existsSync(PATCH_GUARD_SCRIPT)) {
+      const decision = decidePatchAction({ checkCode: null, scriptMissing: true });
+      notifyQuietly(ctx, decision.message, "warning");
+      return;
+    }
+    const runScript = (args) =>
+      new Promise((settle) => {
+        const child = spawn(process.execPath, [PATCH_GUARD_SCRIPT, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+        let stderr = "";
+        child.stdout?.on("data", () => {});
+        child.stderr?.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        child.on("error", (error) => settle({ code: null, stderr: `${stderr}${error?.message ?? error}` }));
+        child.on("close", (code) => settle({ code, stderr }));
+        child.unref?.();
+      });
+    void (async () => {
+      const checked = await runScript(["--check"]);
+      if (checked.code === 0) return;
+      const repaired = await runScript([]);
+      const decision = decidePatchAction({
+        checkCode: checked.code,
+        applyCode: repaired.code,
+        stderr: repaired.stderr || checked.stderr,
+      });
+      if (decision.action === "idle") return;
+      notifyQuietly(ctx, decision.message, decision.action === "repaired" ? "info" : "warning");
+    })().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      notifyQuietly(ctx, `failover-router: the Channels card could not be verified (${message})`, "warning");
+    });
+  };
+
+  pi.on?.("session_start", (_event, ctx) => {
+    guardChannelsCard(ctx);
   });
 
   // ---- throughput measurement -------------------------------------------------
@@ -360,7 +526,7 @@ export default function failoverRouter(pi) {
       renameSync(temporary, speedPath);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      pi.log?.(`failover-router: could not persist speed measurements: ${message}`);
+      log(`failover-router: could not persist speed measurements: ${message}`);
     }
   };
 
@@ -377,13 +543,16 @@ export default function failoverRouter(pi) {
       refs: pending,
       find,
       complete: registry.complete.bind(registry),
-      log: pi.log,
+      // The durable channel, not `pi.log`: a measurement that only reaches a
+      // channel this runtime does not persist is indistinguishable from one that
+      // never ran, which is exactly the confusion this file exists to prevent.
+      log,
       startingTierFor: (ref) => startingTier(speedCache, ref),
     })
       .then(({ measured, failed }) => {
         const now = Date.now();
-        for (const { ref, tokensPerSecond: speed, timeoutTierMs } of measured) {
-          speedCache = recordSample(speedCache, ref, speed, now, timeoutTierMs);
+        for (const { ref, tokensPerSecond: speed, timeoutTierMs, message } of measured) {
+          speedCache = recordSample(speedCache, ref, speed, now, timeoutTierMs, message);
         }
         for (const { ref, message } of failed) {
           // Kept in the cache so the channel is retried next time and the log has
@@ -391,10 +560,13 @@ export default function failoverRouter(pi) {
           speedCache = recordFailure(speedCache, ref, message, now);
         }
         if (measured.length > 0 || failed.length > 0) persist();
+        // A measurement just changed every speed number the card shows.
+        publishChannels();
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        pi.log?.(`failover-router: speed measurement failed: ${message}`);
+        log(`failover-router: speed measurement failed: ${message}`);
+        publishChannels();
       })
       .finally(() => {
         measurement = null;

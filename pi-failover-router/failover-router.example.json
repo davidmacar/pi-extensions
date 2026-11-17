@@ -7,7 +7,6 @@
       "description": "Canales de gpt-6.",
       "order": "cost",
       "thinkingLevels": [
-        "off",
         "low",
         "medium",
         "high",
@@ -42,7 +41,6 @@
       "description": "Canales de deepseek-v4.",
       "order": "cost",
       "thinkingLevels": [
-        "off",
         "high",
         "max"
       ],
@@ -74,7 +72,6 @@
       "description": "Los mismos canales de gpt-6.",
       "order": "speed",
       "thinkingLevels": [
-        "off",
         "low",
         "medium",
         "high",
@@ -109,7 +106,6 @@
       "description": "Los mismos canales de deepseek-v4.",
       "order": "speed",
       "thinkingLevels": [
-        "off",
         "high",
         "max"
       ],

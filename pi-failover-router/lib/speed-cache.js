@@ -12,9 +12,15 @@
  */
 export const SPEED_TTL_MS = 15 * 60_000;
 export const SPEED_CACHE_KIND = "pi-failover-router.speed";
-export const SPEED_CACHE_VERSION = 2;
-/** Samples kept per channel; the median is used so one hung probe cannot win. */
+export const SPEED_CACHE_VERSION = 3;
+/** Samples kept per channel as history. Only the newest one decides the order. */
 export const MAX_SAMPLES = 5;
+/**
+ * Attempts kept per channel. Each one carries the message that explains it, so a
+ * channel with no measurement can be diagnosed from the cache alone instead of
+ * from a session transcript that is already gone.
+ */
+export const MAX_ATTEMPTS = 5;
 /**
  * Timeout tiers, in milliseconds. A short attempt keeps the common case fast; a
  * channel that cannot answer in time is retried with the wider budget, and the
@@ -39,6 +45,30 @@ function normalizeSamples(value) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {Array<{at: number, ok: boolean, message: string}>}
+ */
+function normalizeAttempts(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((attempt) => attempt && typeof attempt === "object" && typeof attempt.at === "number")
+    .map((attempt) => ({
+      at: attempt.at,
+      ok: attempt.ok === true,
+      message: typeof attempt.message === "string" ? attempt.message : "",
+    }))
+    .slice(-MAX_ATTEMPTS);
+}
+
+/**
+ * @param {Array<object>|undefined} attempts
+ * @param {{at: number, ok: boolean, message: string}} attempt
+ */
+function withAttempt(attempts, attempt) {
+  return [...(attempts ?? []), attempt].slice(-MAX_ATTEMPTS);
+}
+
+/**
  * @param {unknown} doc
  * @returns {ReturnType<typeof emptyCache>|undefined} undefined when unreadable
  */
@@ -46,8 +76,9 @@ export function normalizeCache(doc) {
   if (!doc || typeof doc !== "object") return undefined;
   const record = /** @type {Record<string, unknown>} */ (doc);
   if (record.kind !== SPEED_CACHE_KIND) return undefined;
-  // Version 1 carried no failure or tier information; read it, upgrade it.
-  if (record.version !== 1 && record.version !== SPEED_CACHE_VERSION) return undefined;
+  // Version 1 carried no failure or tier information and version 2 stored a
+  // single error instead of a log of attempts; both are read and upgraded.
+  if (![1, 2, SPEED_CACHE_VERSION].includes(record.version)) return undefined;
   if (!record.channels || typeof record.channels !== "object") return undefined;
   const cache = emptyCache();
   for (const [ref, raw] of Object.entries(/** @type {Record<string, unknown>} */ (record.channels))) {
@@ -56,16 +87,21 @@ export function normalizeCache(doc) {
     const samples = normalizeSamples(entry.samples);
     const measuredAt = typeof entry.measuredAt === "number" ? entry.measuredAt : 0;
     const tier = normalizeTier(entry.timeoutTierMs);
+    const attempts = normalizeAttempts(entry.attempts);
     const lastError =
       entry.lastError && typeof entry.lastError === "object"
         ? /** @type {Record<string, unknown>} */ (entry.lastError)
         : undefined;
     const failureAt = typeof lastError?.at === "number" ? lastError.at : undefined;
     const failureMessage = typeof lastError?.message === "string" ? lastError.message : undefined;
-    if (samples.length === 0 && failureAt === undefined) continue;
-    const normalized = { samples, measuredAt };
+    // Version 2 kept only the last error; it becomes the newest attempt.
+    if (failureAt !== undefined) {
+      attempts.push({ at: failureAt, ok: false, message: failureMessage ?? "" });
+    }
+    const kept = attempts.slice(-MAX_ATTEMPTS);
+    if (samples.length === 0 && kept.length === 0) continue;
+    const normalized = { samples, measuredAt, attempts: kept };
     if (tier !== undefined) normalized.timeoutTierMs = tier;
-    if (failureAt !== undefined) normalized.lastError = { at: failureAt, message: failureMessage ?? "" };
     cache.channels[ref] = normalized;
   }
   return cache;
@@ -93,13 +129,22 @@ export function readSpeedCache(path, { readFile } = {}) {
   }
 }
 
-/** Median of the kept samples: resistant to one slow or one suspiciously fast probe. */
+/**
+ * Throughput of the newest measurement.
+ *
+ * The order has to follow the channel as it is now: a channel that starts to
+ * degrade must lose its place on the next measurement, and an average over the
+ * history would keep it in front for several sessions. The earlier samples stay
+ * in the cache for inspection only.
+ *
+ * @param {object|undefined} cache
+ * @param {string} ref
+ * @returns {number|undefined}
+ */
 export function tokensPerSecond(cache, ref) {
   const samples = cache?.channels?.[ref]?.samples ?? [];
   if (samples.length === 0) return undefined;
-  const sorted = [...samples].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  return samples[samples.length - 1];
 }
 
 /** The timeout that last worked for a channel, or the first tier when unknown. */
@@ -108,11 +153,19 @@ export function startingTier(cache, ref) {
 }
 
 /** Adds one sample and stamps it. A success clears the remembered failure. */
-export function recordSample(cache, ref, sample, now, tierMs) {
+export function recordSample(cache, ref, sample, now, tierMs, message) {
   const base = cache ?? emptyCache();
   const previous = base.channels[ref];
   const samples = [...(previous?.samples ?? []), sample].slice(-MAX_SAMPLES);
-  const entry = { samples, measuredAt: now };
+  const entry = {
+    samples,
+    measuredAt: now,
+    attempts: withAttempt(previous?.attempts, {
+      at: now,
+      ok: true,
+      message: typeof message === "string" && message !== "" ? message : `${sample.toFixed(1)} tok/s`,
+    }),
+  };
   const tier = normalizeTier(tierMs) ?? normalizeTier(previous?.timeoutTierMs);
   if (tier !== undefined) entry.timeoutTierMs = tier;
   return { ...base, channels: { ...base.channels, [ref]: entry } };
@@ -127,10 +180,17 @@ export function recordSample(cache, ref, sample, now, tierMs) {
 export function recordFailure(cache, ref, message, now) {
   const base = cache ?? emptyCache();
   const previous = base.channels[ref];
-  const entry = { samples: previous?.samples ?? [], measuredAt: previous?.measuredAt ?? 0 };
+  const entry = {
+    samples: previous?.samples ?? [],
+    measuredAt: previous?.measuredAt ?? 0,
+    attempts: withAttempt(previous?.attempts, {
+      at: now,
+      ok: false,
+      message: typeof message === "string" ? message : String(message),
+    }),
+  };
   const tier = normalizeTier(previous?.timeoutTierMs);
   if (tier !== undefined) entry.timeoutTierMs = tier;
-  entry.lastError = { at: now, message: typeof message === "string" ? message : String(message) };
   return { ...base, channels: { ...base.channels, [ref]: entry } };
 }
 
@@ -150,7 +210,8 @@ export function dueRefs(cache, refs, now) {
   return refs.filter((ref) => {
     const entry = cache.channels[ref];
     if (!entry) return true;
-    if (entry.lastError && entry.lastError.at >= entry.measuredAt) return true;
+    const newest = entry.attempts?.[entry.attempts.length - 1];
+    if (newest && !newest.ok) return true;
     return now - entry.measuredAt >= SPEED_TTL_MS;
   });
 }
