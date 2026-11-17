@@ -115,3 +115,25 @@ rewrote the channels import (`info` re-applied), anchor gone (`warning` naming
 `lib/shell-bar.ts: expected exactly one anchor for "make channels a collapsible section key",
 found 0`), patch script renamed (`warning`, "the patch script is missing"). Suite 153/153 after
 adding 2 guard cases; `apply.mjs --check` clean at the end of every scenario.
+
+L12 — delivery record and the reviewer-model blocker found on the way. The work was published as
+`fb6afa8` + `53b30f3` (origin/master). The native review could not run: reviewer lens models come
+from the saved agent-model routing store `~/.pi/gentle-ai/models.json` (read by the Pi host relay
+through `lib/model-routing-authority.ts` `modelConfigPaths`), and that store mapped every lens to a
+**router virtual model** (`router/sol-rapido`, `router/deepseek-rapido`). The relay completes a
+reviewer with `modelRegistry.complete`, so a virtual model fails with
+`Virtual model router/sol-rapido must be routed before streaming` — `route()` is what turns a
+virtual model into a channel, and the relay never calls it. `prepared_reviewers`/`submitted_reviewers`
+stay at 0 and `mutation_outcome` is `none`, so the attempts cost no authority but can never succeed.
+
+What was fixed and what stayed blocked: the three other layers (`~/.pi/agent/agents/review-*.md`
+frontmatter, `~/.pi/agent/subagents.json`, `~/.pi/agent/profiles.router.json`) were repointed to
+physical channels with `.bak-<timestamp>` backups. `~/.pi/gentle-ai/models.json` is refused to model
+tools by design ("Permission configuration is human-controlled"), so it must be changed through the
+mode settings UI; until then a review whose lenses name `router/*` cannot complete. Delivering this
+work therefore required `gentle-ai review mode disable --scope clone` (global stayed on). To restore
+reviews: set the four `review-*` entries to physical channels in that store, then
+`gentle-ai review mode enable --scope clone`.
+
+L13 — verification at delivery: `npm test` 155/155, `apply.mjs --check` reports the card installed,
+`verify.mjs` renders and asserts the card, and `origin/master` matched local `master` at `53b30f3`.
