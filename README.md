@@ -28,12 +28,23 @@ Then `/reload`.
 ```
 pi-extensions/
 ├── README.md                 this file
-└── pi-failover-router/       one extension
-    ├── index.js              entry file registered in settings.json
-    ├── lib/                  classification and config loading
-    ├── test/                 node --test suites
-    └── README.md             behaviour, configuration, install
+├── pi-failover-router/       one extension
+│   ├── index.js              entry file registered in settings.json
+│   ├── lib/                  classification and config loading
+│   ├── test/                 node --test suites
+│   └── README.md             behaviour, configuration, install
+└── patches/
+    └── gentle-pi-channels/   the Channels card Gentle Shell cannot take as an extension
+        ├── apply.mjs         re-applies the card to an installed gentle-pi (idempotent)
+        ├── verify.mjs        renders the card outside Pi and checks what it paints
+        └── files/lib/        the modules the patch adds
 ```
+
+## Patches
+
+Gentle Shell renders a closed list of rail sections, so a new card has no extension seam. A
+change that belongs inside the package lives under `patches/<package>-<feature>/` — the durable
+copy that puts it back after an upgrade, with its own `apply.mjs` and `verify.mjs`.
 
 ## Development
 
