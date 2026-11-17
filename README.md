@@ -54,3 +54,27 @@ built-in Node test runner and no dependencies:
 ```bash
 cd pi-failover-router && npm test
 ```
+
+### A reload does not reload the code
+
+`/reload` re-creates the extension instances but not the modules they come from. Both
+`pi-failover-router/package.json` files here declare `"type": "module"`, so the loader hands
+the files to Node's native ESM loader, and Node caches a module by URL for the life of the
+process:
+
+```js
+// two imports of the same URL, file edited in between
+const a = await import("file:///x/mod.js"); // v = 1
+const b = await import("file:///x/mod.js"); // v = 1  <- stale
+```
+
+Measured 2026-11-17 with Pi 1.5.2: a session that had reloaded kept executing pre-fix code,
+including log strings that no longer exist on disk. The decision log then read like a failed
+fix rather than a stale process.
+
+**So: restart `pi` to load changed extension code**, and check the build stamp it announces
+before judging a fix:
+
+```bash
+grep 'build .* loaded' ~/.pi/agent/failover-router.log | tail -1
+```

@@ -124,12 +124,32 @@ above, not a passing test.
 
 ## Open questions (not established, do not act on)
 
-- Whether the `message_end` annotation (`lib/retry-bridge.js`) ever reaches Pi's
-  retry allow-list in a live run. The marker never appears in a persisted
-  `errorMessage` of the affected session, and no retry followed the 22:08:40
-  "annotating … for Pi's retry" line, so the takeover is the path that must work.
 - Whether an extension can start a new turn after a run ends, and from which
   event.
 - Whether `noteFailure` can count one failure twice when both paths fire (Pi
   retries after the annotation and `agent_end` also takes over). The 22:08
   incident logged `attempt 1`, consistent with a single count.
+- Why the `message_end` annotation (`lib/retry-bridge.js`) never reaches Pi's retry
+  allow-list in a live run: the modified message is returned and the handler's log
+  line appears, yet no persisted `errorMessage` carries the marker and no retry
+  followed it. The takeover (§4) is the path that must work.
+
+## 7. A reload does not load new code
+
+Established: `/reload` re-creates the extension instances but re-imports the same
+module URLs, and for a package with `"type": "module"` Node caches a module by URL
+for the life of the process. Two consecutive imports of one URL, with the file
+edited in between, both return the pre-edit value; a fresh `jiti` instance
+(`moduleCache: false`) does not help either, because the module is handed to
+Node's native ESM loader.
+
+Evidence from the live process: after a reload at 22:36:49 the decision log shows
+`registered router/...` lines but none of the strings the loaded file contains at
+that moment (`build <hash> loaded`, `asking Pi for one more request`). At 22:20:27,
+after an earlier reload, it still wrote `making ... retryable` and `will not
+continue automatically`, both removed by commit `ea9c7ee` at 22:16:46.
+
+Consequence: a change to this extension takes effect only in a new `pi` process.
+The router announces `failover-router: build <8 hex> loaded (pid <n>)` once per
+load so the question "is this process running the fix?" is answered from the log
+instead of from assumption.
