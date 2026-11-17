@@ -359,7 +359,7 @@ export default function failoverRouter(pi) {
     const errorMessage = retryableErrorText(message.errorMessage);
     if (!errorMessage) return undefined;
     log(
-      `failover-router: ${virtualKey(target)} making ${failedModel} retryable — ${verdict.kind}: ` +
+      `failover-router: ${virtualKey(target)} annotating ${failedModel} for Pi's retry — ${verdict.kind}: ` +
         `${verdict.reason}; next ${next.model}`,
     );
     return { ...message, errorMessage };
@@ -422,15 +422,25 @@ export default function failoverRouter(pi) {
     );
   });
 
-  pi.on?.("agent_before_settle", (event) => {
+  pi.on?.("agent_before_settle", (event, ctx) => {
     if (forcedNext.size === 0) return undefined;
-    if (!event?.context?.canContinue) {
-      // The boundary refuses a bare continuation after an error; the marker keeps
-      // the decision visible and the next user message still benefits from the
-      // rotation, because route() consumes it.
-      log("failover-router: rotation recorded; Pi will not continue automatically");
+    // Only a failed run leaves a rotation pending; a completed one means the next
+    // request already consumed it.
+    if (event?.outcome !== "error") return undefined;
+    // `route()` consumes a rotation keyed by the session's own virtual. Asking for a
+    // request the session cannot route would end on the same channel again, so a
+    // pending rotation for another virtual stays there for its own model.
+    const selected = ctx?.model;
+    if (selected?.provider && selected?.id && !forcedNext.has(`${selected.provider}/${selected.id}`)) {
       return undefined;
     }
+    // `event.context` is built from the entries that exist before this handler runs,
+    // so after an assistant error it always reports `canContinue: false` — the exact
+    // case the takeover exists for. Pi commits the entries returned here and then
+    // rebuilds the context from the session, where the marker is a user message, so
+    // the continuation is valid. Asking the pre-entry context first disabled the
+    // takeover in precisely the failure it was written for.
+    log("failover-router: asking Pi for one more request on the rotated channel");
     return {
       entries: [
         {

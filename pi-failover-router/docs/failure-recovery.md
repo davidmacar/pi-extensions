@@ -47,32 +47,60 @@ message follows it, on any channel.
 Established: after the first failure the session continued, but the entry that
 follows it is a `gentle-jobs.notice` (a background job finishing), not a router
 marker. So the continuation that saved the first failure was caused by that
-notice, and the log cannot show whether the router's own takeover fired.
+notice.
 
-## 4. The settle boundary rejects a bare continuation after an error
+Established from `~/.pi/agent/failover-router.log` for the same session at
+22:08:40, where the failure was a `400 ... "code":"bad_response_status_code"`
+on `subrouter-xcgx`:
 
-Established from the shipped Pi runtime,
-`dist/bundle/chunks/chunk-VEJDBY3O.js` (`_runBeforeSettleBoundary`):
+```
+22:08:40.965 router/sol-barato annotating subrouter-xcgx/gpt-6.1-sol for Pi's retry — channel_capability ...; next subrouter-fxpayback/gpt-6.1-sol
+22:08:40.983 router/sol-rapido taking over subrouter-xcgx/gpt-6.1-sol — channel_capability ...; next subrouter-best/gpt-6.1-sol; 2 min cooldown (attempt 1)
+22:08:41.427 rotation recorded; Pi will not continue automatically
+```
+
+Established: the classifier recognised the failure as channel-owned, the
+`agent_end` takeover picked the next channel, and the takeover then declined to
+continue because of the pre-entry `canContinue` flag (see §4). The decision log
+is persisted, so this is not an unknown.
+
+## 4. The settle boundary checks `canContinue` twice, from different states
+
+Established from the shipped Pi runtime, `dist/core/agent-session.js`
+(`_runBeforeSettleBoundary`):
 
 ```js
+const result = await this._extensionRunner.emitBoundary(
+  { type: "agent_before_settle", outcome },
+  (entries) => this._buildBoundaryContext(entries, "agent_before_settle"),
+);
+this._commitBoundaryDrafts(result.entries);
+this._flushPendingCustomMessages();
 let finalContext = this._buildBoundaryContext([], "agent_before_settle");
-if (this._abortDuringBeforeSettle) return !1;
 let shouldContinue = result.continue || this.agent.hasQueuedMessages();
 return shouldContinue && !finalContext.canContinue
   ? (result.continue && this._reportInvalidBoundaryContinuation("agent_before_settle"), !1)
   : shouldContinue
 ```
 
-Two facts follow directly from that code:
+Two different contexts are built, and only the second one decides:
 
-1. the context that decides `canContinue` is built from an **empty** entry list,
-   so the entries a handler returns cannot raise `canContinue`;
-2. when `canContinue` is false and a handler asked to continue, Pi reports an
-   invalid boundary continuation and returns `false`.
+1. the `context` a handler receives is built from the entries that exist **before**
+   that handler runs, so after an assistant error it always reports
+   `canContinue: false` (last LLM role is `assistant`, nothing queued);
+2. the check after `_commitBoundaryDrafts` rebuilds the context from the **session
+   branch**, which now holds the committed entries. A `custom_message` entry
+   becomes `{ role: "user" }` in `convertToLlm`, so the last role is no longer
+   `assistant` and `canContinue` is true.
 
-Established: a takeover that relies on `agent_before_settle` returning
-`continue: true` after an assistant error cannot rely on its entries to make the
-boundary allow the continuation.
+Established: a handler's returned entries DO raise `canContinue` in the decisive
+check; what cannot raise it is the pre-entry context handed to the handler.
+
+Consequence for the router: gating the continuation on `event.context.canContinue`
+disabled the takeover in the only case it exists for — a terminal error — and the
+rotation was recorded while the human kept the raw error on screen. `index.js`
+now ignores that pre-entry flag and asks for the continuation; Pi's post-commit
+check is the authority. Calling it the other way round was the defect.
 
 ## 5. Both boundary events exist in this Pi version
 
@@ -86,21 +114,22 @@ on(event: "agent_before_settle", handler: ExtensionHandler<AgentBeforeSettleEven
 Established: the handlers are registered; the failure is not a misspelled event
 name.
 
-## 6. Test coverage does not cover this
+## 6. Test coverage
 
 Established: `test/router.test.js` exercises the takeover against a local fake
 `pi` object built by `harness()`. That fake accepts any `entries`/`continue`
-shape. The 103 passing tests therefore prove the router's own logic, not that
-Pi accepts the continuation.
-
-Established: this is why a green suite coexisted with a dead session.
+shape, so the suite proves the router's own logic, not that a real Pi build
+accepts the continuation. The decisive evidence for §4 is the Pi source quoted
+above, not a passing test.
 
 ## Open questions (not established, do not act on)
 
-- The exact inputs `canContinue` is computed from.
+- Whether the `message_end` annotation (`lib/retry-bridge.js`) ever reaches Pi's
+  retry allow-list in a live run. The marker never appears in a persisted
+  `errorMessage` of the affected session, and no retry followed the 22:08:40
+  "annotating … for Pi's retry" line, so the takeover is the path that must work.
 - Whether an extension can start a new turn after a run ends, and from which
   event.
-- Whether an extension can influence the retry allow-list that decides
-  `isRetryableAssistantError`.
-- Whether the router's `agent_end` takeover fired in the affected session. The
-  decision log is written with `pi.log`, which this runtime does not persist.
+- Whether `noteFailure` can count one failure twice when both paths fire (Pi
+  retries after the annotation and `agent_end` also takes over). The 22:08
+  incident logged `attempt 1`, consistent with a single count.

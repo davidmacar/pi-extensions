@@ -538,21 +538,37 @@ test("a channel that keeps failing is cooled down for longer each time", () => {
   assert.equal(streaks.get("a/one"), 3);
 });
 
-test("a boundary that refuses continuation does not lose the rotation", () => {
-  const { registered, handlers, logs, ctx } = deadEndHarness();
+test("the takeover continues even when the error context reports it cannot", () => {
+  const { registered, handlers, ctx } = deadEndHarness();
   ctx.model = { provider: "router", id: "sol" };
   const cheap = registered.find((r) => r.id === "sol");
   handlers.get("agent_end")({ messages: [STREAM_FAILED] }, ctx);
+  // Pi builds this context from the entries that exist BEFORE the handler runs, so
+  // after an assistant error it always says false. The marker entry is what makes
+  // the final context runnable, and Pi re-checks it after committing that entry.
   const settle = handlers.get("agent_before_settle")({
     outcome: "error",
     entries: [],
     context: { canContinue: false },
   });
-  assert.equal(settle, undefined);
-  assert.match(logs.join("\n"), /will not continue automatically/);
-  // The next user request still benefits from the rotation.
-  const next = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(settle?.continue, true);
+  assert.equal(settle.entries[0].type, "custom_message");
+  // The continuation lands on the rotated channel.
+  const next = cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
   assert.equal(next.model.provider, "subrouter-000");
+});
+
+test("a pending rotation for another virtual does not force a continuation", () => {
+  const { handlers, ctx } = deadEndHarness();
+  ctx.model = { provider: "router", id: "sol" };
+  handlers.get("agent_end")({ messages: [STREAM_FAILED] }, ctx);
+  // The session switched virtual after the failure, so its request cannot consume a
+  // rotation that belongs to `sol`; asking for one would end on the same channel.
+  const settle = handlers.get("agent_before_settle")(
+    { outcome: "error", entries: [], context: { canContinue: false } },
+    { model: { provider: "router", id: "other" }, modelRegistry: ctx.modelRegistry },
+  );
+  assert.equal(settle, undefined);
 });
 
 test("a missing config file registers nothing and does not throw", () => {
