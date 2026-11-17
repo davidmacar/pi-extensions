@@ -43,6 +43,14 @@ cannot tell, because it only reads the label. This extension reads the raw messa
   quota/auth. A channel that answers correctly starts over at the base value. Nothing is
   remembered beyond the cooldown, so a long working session never locks a channel out: it
   comes back by itself;
+- **never sends a new request to a channel that is still cooling**, so a manual resend after
+  an error goes to the next channel instead of returning to the one that just failed. When
+  every channel is cooling the configured first one is used anyway: trying is better than an
+  empty router;
+- announces the code it loaded, once per load, as
+  `failover-router: build <8 hex> loaded (pid <n>)`. The stamp is a hash of `index.js` plus
+  every module in `lib/`, so it changes with any edit: `"the fix did not help"` and "the fix
+  is not loaded" are no longer the same sentence;
 - keeps the model that failed when it will not rotate, so you see the real error instead
   of a silently different channel.
 

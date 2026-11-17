@@ -25,6 +25,7 @@ import { createDecisionLog } from "./lib/decision-log.js";
 import { buildChannelsSnapshot, CHANNELS_SNAPSHOT_EVENT } from "./lib/channels-snapshot.js";
 import { decidePatchAction } from "./lib/patch-guard.js";
 import { retryableErrorText } from "./lib/retry-bridge.js";
+import { buildStamp } from "./lib/build-stamp.js";
 import { DEFAULT_LEVELS, isAdmissible, resolveLevel } from "./lib/thinking-level.js";
 import { ConfigError, loadRouterConfig } from "./lib/config.js";
 import {
@@ -147,6 +148,7 @@ export default function failoverRouter(pi) {
     decisionLog(message);
   };
 
+  log(`failover-router: build ${buildStamp()} loaded (pid ${process.pid})`);
   let virtuals = [];
   try {
     virtuals = loadRouterConfig(configPath);
@@ -255,13 +257,20 @@ export default function failoverRouter(pi) {
     const forced = forcedNext.get(key);
     if (forced) {
       forcedNext.delete(key);
-      const model = find(forced.model);
-      if (model) {
-        lastRouted.set(key, forced.model);
-        log(`failover-router: ${key} continuing on ${forced.model} after an unretryable failure`);
-        return withLevel(model, forced.thinkingLevel ?? request.thinkingLevel);
+      if ((cooldowns.get(forced.model) ?? 0) > Date.now()) {
+        // Between the failure and this request the rotation's own target started
+        // cooling too, so honouring it would spend the request on a channel that
+        // is known to be failing.
+        log(`failover-router: ${key} drops the pending rotation to ${forced.model}; it is cooling too`);
+      } else {
+        const model = find(forced.model);
+        if (model) {
+          lastRouted.set(key, forced.model);
+          log(`failover-router: ${key} continuing on ${forced.model} after an unretryable failure`);
+          return withLevel(model, forced.thinkingLevel ?? request.thinkingLevel);
+        }
+        log(`failover-router: ${forced.model} is not in the catalog; ignoring the rotation`);
       }
-      log(`failover-router: ${forced.model} is not in the catalog; ignoring the rotation`);
     }
 
     // Everything else sticks to the model that last answered successfully,
@@ -272,10 +281,19 @@ export default function failoverRouter(pi) {
     }
 
     const ordered = chainFor(def);
-    const first = find(ordered[0].model);
+    // A new request is a fresh attempt, but not on a channel whose failure the
+    // human has already read: a manual resend that returns to the channel that
+    // just answered 400 makes the router look absent. Channels come back by
+    // themselves when their cooldown ends.
+    const now = Date.now();
+    const step = ordered.find((candidate) => (cooldowns.get(candidate.model) ?? 0) <= now) ?? ordered[0];
+    if (step !== ordered[0]) {
+      log(`failover-router: ${key} skips ${ordered[0].model} for this request; it is cooling after a failure`);
+    }
+    const first = find(step.model);
     if (!first) return undefined; // let Pi report the broken config
-    lastRouted.set(key, ordered[0].model);
-    return withLevel(first, ordered[0].thinkingLevel ?? request.thinkingLevel);
+    lastRouted.set(key, step.model);
+    return withLevel(first, step.thinkingLevel ?? request.thinkingLevel);
   };
 
   /** One initial publish per session, so a late-loading shell is never empty. */

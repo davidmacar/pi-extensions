@@ -571,6 +571,51 @@ test("a pending rotation for another virtual does not force a continuation", () 
   assert.equal(settle, undefined);
 });
 
+test("a user request never lands on a channel that is still cooling", () => {
+  const { ctx, registered, fire } = boot();
+  const cheap = registered.find((r) => r.id === "sol");
+  const selected = { provider: "router", id: "sol" };
+
+  const first = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(first.model.provider, "subrouter-best");
+
+  // That channel answers with a channel-owned 400 the human has to read today.
+  fire(
+    "agent_end",
+    { messages: [{ role: "user" }, { ...STREAM_FAILED, provider: "subrouter-best" }] },
+    { model: selected },
+  );
+
+  // A manual resend is a new `user` request: it must not return to the channel
+  // that just failed, or the human keeps reading the same error.
+  const retry = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(retry.model.provider, "subrouter-000");
+});
+
+test("a user request still routes when every channel is cooling", () => {
+  const { ctx, registered, fire } = boot();
+  const cheap = registered.find((r) => r.id === "sol");
+  const selected = { provider: "router", id: "sol" };
+
+  for (const provider of ["subrouter-best", "subrouter-000", "subrouter-fxpayback"]) {
+    fire(
+      "agent_end",
+      { messages: [{ role: "user" }, { ...STREAM_FAILED, provider }] },
+      { model: selected },
+    );
+  }
+
+  // Nothing is available, but refusing to route would be worse than trying: the
+  // human gets a request instead of an empty router.
+  const fallback = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(fallback.model.provider, "subrouter-best");
+});
+
+test("the loaded build is announced so a stale process is visible", () => {
+  const { logs } = boot();
+  assert.match(logs.join("\n"), /failover-router: build [0-9a-f]{8} loaded \(pid \d+\)/);
+});
+
 test("a missing config file registers nothing and does not throw", () => {
   const h = harness({ config, catalog });
   process.env.PI_FAILOVER_ROUTER_CONFIG = "/tmp/definitely-not-here-9f2.json";
