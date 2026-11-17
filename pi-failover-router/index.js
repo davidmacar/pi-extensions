@@ -128,6 +128,27 @@ export default function failoverRouter(pi) {
   const chainFor = (def) =>
     def.order === "speed" ? orderBySpeed(def.chain, speedCache, tokensPerSecond) : def.chain;
 
+  const virtualKey = (def) => `${def.provider}/${def.id}`;
+
+  /**
+   * A session commits to one model for its whole life, and Pi keeps each virtual
+   * model's route under that virtual id alone (`model-runtime.js` maps id -> route).
+   * A session that selected a physical channel therefore never asks a router/*
+   * route, so no rotation can reach it. Silent ineffectiveness is the worst
+   * outcome for a failover layer, so this is reported out loud instead.
+   */
+  const bypassReport = (model) => {
+    if (!model?.provider || !model?.id) return undefined;
+    const key = `${model.provider}/${model.id}`;
+    if (virtuals.some((def) => virtualKey(def) === key)) return undefined;
+    const owner = virtuals.find((def) => def.chain.some((step) => step.model === key));
+    if (!owner) return undefined;
+    return (
+      `failover-router: this session bypasses failover — it selected ${key} directly, ` +
+      `so no rotation applies; select ${virtualKey(owner)} to get the chain`
+    );
+  };
+
   /** Pure decision for one request; returns synchronously. */
   const decideRoute = (def, key, request, ctx) => {
     const find = (ref) => {
@@ -259,6 +280,14 @@ export default function failoverRouter(pi) {
     // twice and log a decision that nobody uses.
     const selected = ctx?.model;
     const selectedKey = selected?.provider && selected?.id ? `${selected.provider}/${selected.id}` : undefined;
+
+    // Rotating a session that cannot consume the rotation would log a decision
+    // that never reaches a request.
+    const bypass = bypassReport(selected);
+    if (bypass) {
+      pi.log?.(bypass);
+      return;
+    }
     const target = selectedKey
       ? virtuals.find((def) => `${def.provider}/${def.id}` === selectedKey)
       : virtuals.find((def) => def.chain.some((step) => step.model === failedModel));
@@ -308,10 +337,12 @@ export default function failoverRouter(pi) {
     };
   });
 
-  pi.on?.("session_start", () => {
+  pi.on?.("session_start", (event, ctx) => {
     // A new or reloaded session starts with no remembered failures.
     failureStreak.clear();
     forcedNext.clear();
+    const bypass = bypassReport(ctx?.model);
+    if (bypass) pi.log?.(bypass);
   });
 
   // ---- throughput measurement -------------------------------------------------

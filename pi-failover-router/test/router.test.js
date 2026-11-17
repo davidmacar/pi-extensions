@@ -10,16 +10,26 @@ import failoverRouter, { MEASURE_WAIT_MS, noteFailure } from "../index.js";
 function harness({ config, catalog }) {
   const registered = [];
   const logs = [];
+  const handlers = new Map();
   const pi = {
     log: (m) => logs.push(m),
     registerVirtualModel: (def) => registered.push(def),
+    on: (name, fn) => {
+      const list = handlers.get(name) ?? [];
+      list.push(fn);
+      handlers.set(name, list);
+    },
+  };
+  const fire = (name, event, extra) => {
+    const list = handlers.get(name) ?? [];
+    return list.map((fn) => fn(event, { ...ctx, ...extra }));
   };
   const ctx = {
     modelRegistry: {
       find: (provider, id) => catalog.find((m) => m.provider === provider && m.id === id),
     },
   };
-  return { pi, ctx, registered, logs };
+  return { pi, ctx, registered, logs, fire, handlers };
 }
 
 const catalog = [
@@ -647,4 +657,44 @@ test("a clean run clears the streak of the channel that answered", () => {
   }, ctx);
   // Nothing is rotated and nothing is logged for a clean run.
   assert.equal(logs.filter((l) => l.includes("taking over")).length, 0);
+});
+
+/** The unretryable failure that ends a run without Pi ever asking for a retry. */
+const http2Failure = {
+  role: "assistant",
+  provider: "subrouter-fxpayback",
+  model: "gpt-6.1-sol",
+  stopReason: "error",
+  errorMessage: "upstream stream read failed before completion: http2: response body closed",
+  usage: { output: 0 },
+};
+
+test("a session pinned to a physical model says failover is not active", () => {
+  const { fire, logs } = boot();
+  // The session selected the channel itself, so no router/* route is ever asked.
+  fire("agent_end", { messages: [http2Failure] }, { model: { provider: "subrouter-fxpayback", id: "gpt-6.1-sol" } });
+  const reported = logs.find((l) => l.includes("bypasses failover"));
+  assert.ok(reported, `expected a bypass report, got: ${logs.join(" | ")}`);
+  assert.match(reported, /subrouter-fxpayback\/gpt-6\.1-sol/);
+  assert.match(reported, /router\/sol/);
+});
+
+test("a virtual model that fails still takes over, as before", () => {
+  const { fire, logs } = boot();
+  fire("agent_end", { messages: [http2Failure] }, { model: { provider: "router", id: "sol" } });
+  const takeover = logs.find((l) => l.includes("taking over"));
+  assert.ok(takeover, `expected a takeover, got: ${logs.join(" | ")}`);
+  assert.match(takeover, /next (subrouter-best|subrouter-000)\/gpt-6\.1-sol/);
+});
+
+test("session_start reports a physical selection that has a router equivalent", () => {
+  const { fire, logs } = boot();
+  fire("session_start", {}, { model: { provider: "subrouter-best", id: "gpt-6.1-sol" } });
+  assert.ok(logs.some((l) => l.includes("bypasses failover")), logs.join(" | "));
+});
+
+test("session_start stays quiet on a virtual model", () => {
+  const { fire, logs } = boot();
+  fire("session_start", {}, { model: { provider: "router", id: "sol" } });
+  assert.equal(logs.some((l) => l.includes("bypasses failover")), false, logs.join(" | "));
 });
