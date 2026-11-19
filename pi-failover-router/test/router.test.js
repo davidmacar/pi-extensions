@@ -10,6 +10,8 @@ import failoverRouter, { MEASURE_WAIT_MS, noteFailure } from "../index.js";
 // record a later diagnosis reads, and test noise buries the real decisions.
 const TEST_DECISION_LOG = join(tmpdir(), `pi-failover-router-log-test-${process.pid}.log`);
 process.env.PI_FAILOVER_ROUTER_LOG = TEST_DECISION_LOG;
+// Router tests must never run the optional installed-shell repair process.
+process.env.PI_FAILOVER_ROUTER_NO_PATCHER = "1";
 
 /** Minimal fake ExtensionAPI + model registry that records routing decisions. */
 function harness({ config, catalog }) {
@@ -178,7 +180,8 @@ test("continuation sticks to the model of the previous response", () => {
   assert.equal(out.thinkingLevel, "high");
 });
 
-test("the failing model enters cooldown so the next rotation skips it", () => {
+test("the failing model enters cooldown and a complete repeat waits for it", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000_000 });
   const { registered, ctx } = boot();
   const failed = (provider) => ({
     reason: "retry",
@@ -194,8 +197,9 @@ test("the failing model enters cooldown so the next rotation skips it", () => {
   const second = registered[0].route(failed("subrouter-000"), ctx);
   assert.equal(second.model.provider, "subrouter-fxpayback");
   const third = registered[0].route(failed("subrouter-fxpayback"), ctx);
-  // nothing left: it stays on the model that just failed
-  assert.equal(third.model.provider, "subrouter-fxpayback");
+  assert.equal(typeof third?.then, "function", "a repeat must honor cooldown");
+  t.mock.timers.tick(2 * 60_000);
+  assert.equal((await third).model.provider, "subrouter-best");
 });
 
 test("a chain step without a level keeps the level the caller selected", () => {
@@ -467,9 +471,9 @@ test("an unknown failure does not take over", () => {
   assert.equal(logs.filter((l) => l.includes("taking over")).length, 0);
 });
 
-test("takeover keeps going until every channel of the chain has been tried", () => {
-  // Four channels, like the real sol chain: the takeover must reach the fourth
-  // instead of stopping at a fixed budget, then refuse because all are cooling.
+test("takeover completes the initial chain and three repeats before stopping", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000_000 });
+  // The fourth channel must be reached once per pass, even after slow failures.
   const fourChannel = {
     virtuals: [
       {
@@ -498,8 +502,10 @@ test("takeover keeps going until every channel of the chain has been tried", () 
   ctx.model = { provider: "router", id: "sol" };
   const cheap = registered.find((r) => r.id === "sol");
   const tried = [];
-  for (let i = 0; i < 6; i += 1) {
-    const out = cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
+  for (let i = 0; i < 16; i += 1) {
+    const pending = cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
+    if (pending?.then) t.mock.timers.tick(2 * 60 * 60_000);
+    const out = await pending;
     tried.push(out.model.provider);
     handlers.get("agent_end")(
       {
@@ -515,19 +521,14 @@ test("takeover keeps going until every channel of the chain has been tried", () 
       },
       ctx,
     );
-    handlers.get("agent_before_settle")({ outcome: "error", entries: [], context: { canContinue: true } });
+    const boundary = handlers.get("agent_before_settle")({ outcome: "error", entries: [], context: { canContinue: true } });
+    assert.equal(boundary?.continue, i < 15 ? true : undefined);
   }
-  // All four channels are tried in order; afterwards the last one stays, because
-  // every channel is cooling down. Nothing is blocked for longer than a cooldown.
-  assert.deepEqual(tried, [
-    "subrouter-best",
-    "subrouter-000",
-    "subrouter-fxpayback",
-    "subrouter-xcgx",
-    "subrouter-xcgx",
-    "subrouter-xcgx",
-  ]);
-  assert.match(logs.join("\n"), /chain exhausted/);
+  assert.deepEqual(tried, [...Array(4)].flatMap(() => [
+    "subrouter-best", "subrouter-000", "subrouter-fxpayback", "subrouter-xcgx",
+  ]));
+  assert.match(logs.join("\n"), /recovery exhausted/);
+  assert.throws(() => cheap.route({ reason: "continuation", messages: [] }, ctx), /recovery exhausted/);
 });
 
 test("a channel that keeps failing is cooled down for longer each time", () => {
@@ -605,8 +606,8 @@ test("a user request still routes when every channel is cooling", () => {
     );
   }
 
-  // Nothing is available, but refusing to route would be worse than trying: the
-  // human gets a request instead of an empty router.
+  // A real new user prompt clears recovery but preserves cooldown history.
+  fire("before_agent_start", {}, { model: selected });
   const fallback = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
   assert.equal(fallback.model.provider, "subrouter-best");
 });
@@ -670,7 +671,8 @@ test("a request does not wait forever for a measurement session", async () => {
   assert.match(logs.join("\n"), /routing without waiting further/);
 });
 
-test("a channel comes back by itself when its cooldown expires, without a new session", () => {
+test("a channel comes back by itself when its cooldown expires, without a new session", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000_000 });
   const { registered, handlers, ctx } = deadEndHarness();
   ctx.model = { provider: "router", id: "sol" };
   const cheap = registered.find((r) => r.id === "sol");
@@ -699,19 +701,13 @@ test("a channel comes back by itself when its cooldown expires, without a new se
   assert.equal(second.model.provider, "subrouter-000");
   fail("subrouter-000");
 
-  // Both are cooling down: the chain reports exhaustion.
+  // Both are cooling: recovery waits for the first channel of the next pass.
   const blocked = cheap.route({ reason: "continuation", thinkingLevel: "high", messages: [] }, ctx);
-  assert.equal(blocked.model.provider, "subrouter-000", "sticky on the last used channel");
-
-  // Time passes inside the same session: no new session_start.
-  const realNow = Date.now;
-  try {
-    Date.now = () => realNow() + 3 * 60_000;
-    const recovered = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
-    assert.equal(recovered.model.provider, "subrouter-best", "the first channel is available again");
-  } finally {
-    Date.now = realNow;
-  }
+  assert.equal(typeof blocked?.then, "function");
+  t.mock.timers.tick(3 * 60_000);
+  assert.equal((await blocked).model.provider, "subrouter-best");
+  const recovered = cheap.route({ reason: "user", thinkingLevel: "high", messages: [] }, ctx);
+  assert.equal(recovered.model.provider, "subrouter-best");
 });
 
 test("a successful response clears the channel's failure streak", async () => {
@@ -788,7 +784,7 @@ test("a request-shaped error is never made retryable", () => {
   assert.equal(replacement, undefined);
 });
 
-test("a chain with nowhere to go keeps the real error", () => {
+test("a single-channel failure keeps provider text and enables a bounded repeat", () => {
   const single = {
     virtuals: [
       {
@@ -802,7 +798,8 @@ test("a chain with nowhere to go keeps the real error", () => {
   };
   const { fire } = boot(single);
   const [replacement] = fire("message_end", { message: http2Failure });
-  assert.equal(replacement, undefined);
+  assert.ok(replacement.errorMessage.startsWith(http2Failure.errorMessage));
+  assert.match(replacement.errorMessage, /upstream_stream_read_error/);
 });
 
 test("a message that did not fail is left alone", () => {

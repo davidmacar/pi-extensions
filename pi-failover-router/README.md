@@ -30,23 +30,34 @@ cannot tell, because it only reads the label. This extension reads the raw messa
 - **rotates** to the next candidate when the failure is channel-owned or transient;
 - **refuses to rotate** when the failure is request-shaped (context length, malformed
   payload, missing field, unknown), because every model would fail the same way;
-- **takes over failures Pi refuses to retry.** Pi decides retryability with an allow-list
-  (`isRetryableAssistantError` in `@earendil-works/pi-ai`). A message outside it — precisely
-  `upstream stream read failed before completion: http2: response body closed`, which matches
-  neither `upstream_stream_read_error` nor `http/?2 stream failed` — ends the run before
-  `route()` is ever asked with `reason: "retry"`. On `agent_end` the router picks the next
-  channel, and on `agent_before_settle` it appends a marker entry and asks for one more
-  request, so the retry happens on the next channel. There is no rotation budget:
-  what limits it is the cooldown, which always expires;
+- **takes over failures Pi refuses to retry.** Pi has its own provider-error retry policy, but
+  channel rotation is planned once in this extension and shared by native retries and the
+  final-settle takeover. For a terminal error, `agent_end` records the next eligible channel;
+  `agent_before_settle` requests one continuation. This also handles errors that do not match
+  Pi's retry allow-list, such as `upstream stream read failed before completion: http2: response body closed`;
+- **bounds recovery to four full passes per failure episode:** the initial pass plus at most
+  three repeats. Each channel is dispatched at most once in a pass, including when Pi's native
+  retry policy and the router's terminal takeover both see the failure. The pass order is
+  captured when the episode starts; cooldowns are still honored, with an abortable asynchronous
+  wait before a cooling candidate is dispatched. A successful assistant response resets the
+  episode. Request-shaped errors, unknown errors and user cancellation do not start a replay;
+  after the final repeat, no more provider request is dispatched and the route surfaces the last
+  provider error. Completed tool calls are not re-executed by this recovery path;
 - puts the failed model in **cooldown**, doubling with each consecutive failure of the same
   channel: 2 → 4 → 8 → 16 → 30 min for transient failures, from 30 min up to 2 hours for
-  quota/auth. A channel that answers correctly starts over at the base value. Nothing is
-  remembered beyond the cooldown, so a long working session never locks a channel out: it
-  comes back by itself;
-- **never sends a new request to a channel that is still cooling**, so a manual resend after
-  an error goes to the next channel instead of returning to the one that just failed. When
-  every channel is cooling the configured first one is used anyway: trying is better than an
-  empty router;
+  quota/auth. A channel that answers correctly starts over at the base value. Cooldown expiry
+  makes the channel eligible again; it does not reset an exhausted recovery episode;
+- **keeps new user prompts responsive.** `before_agent_start` starts a fresh episode and
+  cancels an earlier recovery wait, including stale persisted route state. A new user request
+  picks the first channel outside cooldown, or the configured first channel if all are cooling.
+  Recovery continuations instead honor each candidate's cooldown; cancelling a wait rejects
+  the route with `AbortError` and returns no model to dispatch. Concurrent waits for the same
+  recovery decision share one dispatch, but each caller's `AbortSignal` independently rejects
+  that caller with `AbortError` and no model. If every caller cancels, the timer and recovery
+  episode stop; a remaining caller can still complete the shared dispatch. At each cooldown
+  deadline the router rechecks the shared physical channel's deadline: another virtual's
+  failure may have extended it, in which case it waits abortably for the new deadline without
+  polling. Repeated settle hooks add only one continuation marker;
 - announces the code it loaded, once per load, as
   `failover-router: build <8 hex> loaded (pid <n>)`. The stamp is a hash of `index.js` plus
   every module in `lib/`, so it changes with any edit: `"the fix did not help"` and "the fix
@@ -54,8 +65,19 @@ cannot tell, because it only reads the label. This extension reads the raw messa
 - keeps the model that failed when it will not rotate, so you see the real error instead
   of a silently different channel.
 
-Other reasons (`user`, `continuation`, `direct`) stick to the model that last answered,
-which keeps the prompt cache warm.
+Outside a pending recovery decision, `continuation` and `direct` keep the provided previous
+physical model object (including runtime overrides such as `baseUrl`) and thinking level,
+which keeps the prompt cache warm. A non-rotatable retry likewise keeps the supplied failed
+model object instead of replacing it with the catalog entry. A new `user` request uses the chain's
+order and configured step level. Routes stay synchronous unless a recovery cooldown or an
+in-flight throughput measurement requires waiting.
+
+A session that selects a physical model directly bypasses the virtual router. Its assistant
+errors are intentionally **not annotated** with a router retry hint and do not trigger takeover,
+even if that physical model belongs to a configured chain. Earlier annotation-only behavior
+could suggest failover where the session could not consume it; select the virtual model to
+activate recovery. The custom continuation marker does not fire `before_agent_start`, so it
+keeps the current recovery pass; that reset hook is reserved for a real new prompt.
 
 ## Configuration
 
@@ -175,15 +197,21 @@ only trusts the five levels these providers accept.
 npm test
 ```
 
-30 classification/config cases and 10 router cases, including the two real error bodies
-above and the must-not-rotate cases. `node --test`, no dependencies.
+The suite covers classification, configuration, normal routing, throughput measurement and
+bounded recovery through the extension's public routes and hooks. Recovery tests use fake time
+for cooldowns, cancellation, overlapping lifecycle events, exhaustion and success reset.
+Run those directly with `node --test test/recovery.test.js`. `node --test`, no dependencies.
 
 ## Scope and honest limits
 
 - It routes **models**, not channels. A Pi request cannot pin a channel; a channel can only
   be pinned by using a provider whose API key is bound to that channel.
-- It reacts on `retry`, so Pi has already spent its own retries on the failed model before
-  a rotation happens.
+- It plans recovery on assistant failure hooks and native `retry` routes. Pi's native retry
+  policy still decides when to ask the route; the terminal takeover handles errors it abandons.
+  The shared episode limits router dispatches across both paths.
+- Recovery adds a continuation using existing conversation and tool results; the extension
+  never invokes or replays tools itself. The continuation asks the model to preserve completed
+  actions, but cannot guarantee what new tool calls the model will choose.
 - A request-shaped failure is never retried elsewhere, by design. If a real channel defect
   ever produces a request-shaped label not covered in `lib/classify.js`, add the marker
   there **with a test** rather than loosening the generic patterns.

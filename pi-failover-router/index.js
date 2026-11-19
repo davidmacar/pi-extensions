@@ -20,12 +20,13 @@ import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyFailure, cooldownMs, nextCandidate } from "./lib/classify.js";
+import { classifyFailure, cooldownMs } from "./lib/classify.js";
 import { createDecisionLog } from "./lib/decision-log.js";
 import { buildChannelsSnapshot, CHANNELS_SNAPSHOT_EVENT } from "./lib/channels-snapshot.js";
 import { decidePatchAction } from "./lib/patch-guard.js";
-import { retryableErrorText } from "./lib/retry-bridge.js";
+import { newRecovery, planRecovery, dispatchRecovery, waitForCooldown } from "./lib/recovery.js";
 import { buildStamp } from "./lib/build-stamp.js";
+import { retryableErrorText } from "./lib/retry-bridge.js";
 import { DEFAULT_LEVELS, isAdmissible, resolveLevel } from "./lib/thinking-level.js";
 import { ConfigError, loadRouterConfig } from "./lib/config.js";
 import {
@@ -125,16 +126,53 @@ export default function failoverRouter(pi) {
   let speedCache = emptyCache();
   /** The measurement session in flight, if any. */
   let measurement = null;
+  const recovery = new Map();
+  const resetRecovery = new Set();
+  // Timers/controllers are deliberately kept out of Pi's JSON route state.
+  const recoveryWaits = new Map();
+  let dispatchSerial = 0;
+  const abortError = () => new DOMException("Channel recovery cancelled", "AbortError");
+  const stopRecovery = (key) => {
+    const state = recovery.get(key);
+    if (state) {
+      state.pending = null;
+      state.stopped = true;
+    }
+    recoveryWaits.get(key)?.controller.abort();
+  };
+  const clearRecovery = (key) => {
+    stopRecovery(key);
+    recovery.delete(key);
+    resetRecovery.add(key);
+  };
+  // Share the dispatch, not callers' cancellation: each observer owns its
+  // signal. Cancel the episode's timer only when nobody is waiting anymore.
+  const observeRecoveryWait = (key, waiting, signal) => new Promise((resolve, reject) => {
+    const observer = {};
+    waiting.observers.add(observer);
+    let settled = false;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", abort);
+      waiting.observers.delete(observer);
+      if (error) reject(error);
+      else resolve(result);
+    };
+    const abort = () => {
+      finish(abortError());
+      if (waiting.observers.size === 0 && recoveryWaits.get(key) === waiting) stopRecovery(key);
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    waiting.promise.then(
+      result => signal?.aborted ? abort() : finish(undefined, result),
+      error => finish(error),
+    );
+  });
   /**
-   * `${provider}/${id}` -> channel to use on the next request, set when a failure
-   * Pi refuses to retry ends the run. Cleared as soon as it is used.
-   */
-  const forcedNext = new Map();
-  /**
-   * `${provider}/${id}` -> consecutive failures. Drives the cooldown backoff, so a
-   * channel that keeps failing is tried further and further apart. Nothing else
-   * limits rotations: every channel becomes available again when its cooldown
-   * expires, which is what keeps a long working session from ever being stuck.
+   * `${provider}/${id}` -> consecutive failures, driving cooldown backoff.
+   * Recovery also has a separate four-pass budget per failure episode.
    */
   const failureStreak = new Map();
 
@@ -207,93 +245,162 @@ export default function failoverRouter(pi) {
     );
   };
 
-  /** Pure decision for one request; returns synchronously. */
+  const selectedDefinition = (ctx, failedModel) => {
+    const selected = ctx?.model;
+    if (selected?.provider && selected?.id) {
+      return virtuals.find(def => virtualKey(def) === `${selected.provider}/${selected.id}`);
+    }
+    return virtuals.find(def => def.chain.some(step => step.model === failedModel));
+  };
+
+  // Both native retry and terminal takeover consume the same planned decision.
+  // agent_end may repeat the message object, so use the persisted dispatch token
+  // plus its timestamp rather than object identity alone.
+  const recordChannelFailure = (def, message, model) => {
+    const key = virtualKey(def);
+    let state = recovery.get(key);
+    if (!state) {
+      state = newRecovery();
+      recovery.set(key, state);
+    }
+    const failedModel = model ?? `${message?.provider}/${message?.model}`;
+    const verdict = classifyFailure(message?.errorMessage);
+    if (!verdict.rotate || !chainFor(def).some(step => step.model === failedModel)) {
+      state.pending = null;
+      log(`failover-router: ${key} not recovering ${failedModel} — ${verdict.kind}: ${verdict.reason}`);
+      return state;
+    }
+    if (state.stopped || state.exhausted) return state;
+    // agent_end can arrive after native retry already routed another channel.
+    // Timestamps identify cloned late messages, including single-channel repeats.
+    const identity = message?.timestamp === undefined ? undefined : `${failedModel}:${message.timestamp}`;
+    state.seenFailures ??= [];
+    if ((identity && state.seenFailures.includes(identity)) || (state.last && state.last !== failedModel)) return state;
+    if (identity) state.seenFailures.push(identity);
+    state.order ??= structuredClone(chainFor(def));
+    const failureKey = `${state.dispatchToken ?? "initial"}:${failedModel}:${message?.timestamp ?? ""}`;
+    if (!planRecovery(state, state.order, failedModel, message.errorMessage, failureKey)) return state;
+    const streak = noteFailure(failureStreak, failedModel);
+    const waitMs = cooldownMs(verdict.kind, streak);
+    cooldowns.set(failedModel, Date.now() + waitMs);
+    publishChannels();
+    log(`failover-router: ${key} failure recorded ${failedModel} — ${verdict.kind}; ${Math.round(waitMs / 60_000)} min cooldown (attempt ${streak + 1})`);
+    if (state.exhausted) {
+      log(`failover-router: ${key} recovery exhausted after initial pass and 3 repeats; last error: ${state.error}`);
+    } else {
+      log(`failover-router: ${key} taking over ${failedModel}; next ${state.pending.step.model}; pass ${state.pending.pass + 1}/4`);
+    }
+    return state;
+  };
+
+  /** Plan synchronously; only a cooldown wait returns a Promise. */
   const decideRoute = (def, key, request, ctx) => {
-    const find = (ref) => {
+    const find = ref => {
       const slash = ref.indexOf("/");
       return ctx.modelRegistry.find(ref.slice(0, slash), ref.slice(slash + 1));
     };
-
-    // `retry` means Pi already tried and failed. This is the only moment we
-    // know which physical model broke, and the only moment worth rotating.
+    let state = recovery.get(key);
+    if (!state) {
+      state = !resetRecovery.has(key) && request.state?.version === 1 ? structuredClone(request.state) : newRecovery();
+      resetRecovery.delete(key);
+      recovery.set(key, state);
+    }
+    const signal = request.signal ?? ctx?.signal;
+    if (signal?.aborted) {
+      stopRecovery(key);
+      throw abortError();
+    }
+    if (state.exhausted) {
+      throw new Error(`failover-router: recovery exhausted after initial pass and 3 repeats: ${state.error}`);
+    }
     if (request.reason === "retry" && request.failed) {
       const failedModel = `${request.failed.model?.provider}/${request.failed.model?.id}`;
-      const errorMessage = request.failed.message?.errorMessage;
-      const verdict = classifyFailure(errorMessage);
-      log(
-        `failover-router: ${key} retry after ${failedModel} — ${verdict.kind}: ${verdict.reason}` +
-          (verdict.rotate ? "" : " (not rotating)"),
-      );
-      if (verdict.rotate) {
-        const now = Date.now();
-        const streak = noteFailure(failureStreak, failedModel);
-        cooldowns.set(failedModel, now + cooldownMs(verdict.kind, streak));
-        // The card shows the cooldown that just started, without waiting for the
-        // next measurement to repaint the rail.
-        publishChannels();
-        const next = nextCandidate({ chain: chainFor(def), failedModel, cooldowns, now });
-        if (next) {
-          const model = find(next.model);
-          if (model) {
-            lastRouted.set(key, next.model);
-            return withLevel(model, next.thinkingLevel ?? request.thinkingLevel);
-          }
-          log(`failover-router: ${next.model} is not in the catalog; falling through`);
-        } else {
-          log(`failover-router: ${key} chain exhausted`);
+      const verdict = classifyFailure(request.failed.message?.errorMessage);
+      log(`failover-router: ${key} retry after ${failedModel} — ${verdict.kind}: ${verdict.reason}`);
+      if (request.failed.message?.stopReason === "aborted") {
+        stopRecovery(key);
+        throw abortError();
+      }
+      if (!verdict.rotate) {
+        stopRecovery(key);
+        const same = request.failed.model;
+        return withLevel(same, request.failed.thinkingLevel);
+      }
+      state = recordChannelFailure(def, request.failed.message, failedModel);
+    }
+    if (state.stopped) throw abortError();
+    if (state.exhausted) {
+      throw new Error(`failover-router: recovery exhausted after initial pass and 3 repeats: ${state.error}`);
+    }
+    if (state.pending) {
+      const { step, pass } = state.pending;
+      const model = find(step.model);
+      if (!model) {
+        state.pending = null;
+        throw new Error(`failover-router: ${step.model} is not in the catalog; last error: ${state.error}`);
+      }
+      const existingWait = recoveryWaits.get(key);
+      if (existingWait?.state === state) return observeRecoveryWait(key, existingWait, signal);
+      const dispatch = () => {
+        if (state.stopped || recovery.get(key) !== state) {
+          stopRecovery(key);
+          throw abortError();
         }
-      }
-      // Not rotating, or nowhere to go: keep the model that failed so the
-      // human sees the real error rather than a silently different channel.
-      const same = request.failed.model;
-      if (same) {
-        const level = resolveLevel(find(same.provider + "/" + same.id) ?? same, request.failed.thinkingLevel);
-        return level ? { model: same, thinkingLevel: level } : { model: same };
-      }
+        dispatchRecovery(state, step, pass);
+        state.dispatchToken = ++dispatchSerial;
+        state.failureKey = null;
+        lastRouted.set(key, step.model);
+        log(`failover-router: ${key} continuing on ${step.model}; pass ${pass + 1}/4`);
+        return { ...withLevel(model, step.thinkingLevel ?? request.thinkingLevel), state: structuredClone(state) };
+      };
+      const waitMs = Math.max(0, (cooldowns.get(step.model) ?? 0) - Date.now());
+      if (waitMs === 0) return dispatch();
+      log(`failover-router: ${key} waiting ${waitMs} ms for ${step.model}; pass ${pass + 1}/4 (cancel to stop)`);
+      try { ctx?.ui?.setStatus?.("failover-router", `Channel recovery: waiting ${Math.ceil(waitMs / 1000)}s, pass ${pass + 1}/4`); } catch {}
+      const controller = new AbortController();
+      const waiting = { state, controller, observers: new Set() };
+      // Another virtual can extend the shared physical cooldown while this
+      // timer sleeps. Recheck only at a deadline, then wait for the new one;
+      // never poll or dispatch using the stale deadline.
+      const awaitDeadline = () => {
+        if (controller.signal.aborted) throw abortError();
+        const remaining = Math.max(0, (cooldowns.get(step.model) ?? 0) - Date.now());
+        return remaining > 0
+          ? waitForCooldown(remaining, controller.signal).then(awaitDeadline)
+          : dispatch();
+      };
+      waiting.promise = Promise.resolve(awaitDeadline()).finally(() => {
+        if (recoveryWaits.get(key) === waiting) {
+          recoveryWaits.delete(key);
+          try { ctx?.ui?.setStatus?.("failover-router", undefined); } catch {}
+        }
+      });
+      recoveryWaits.set(key, waiting);
+      return observeRecoveryWait(key, waiting, signal);
     }
 
-    // A dead end that Pi would not retry leaves a channel to use next. It wins
-    // over the sticky model, which is the channel that just failed.
-    const forced = forcedNext.get(key);
-    if (forced) {
-      forcedNext.delete(key);
-      if ((cooldowns.get(forced.model) ?? 0) > Date.now()) {
-        // Between the failure and this request the rotation's own target started
-        // cooling too, so honouring it would spend the request on a channel that
-        // is known to be failing.
-        log(`failover-router: ${key} drops the pending rotation to ${forced.model}; it is cooling too`);
-      } else {
-        const model = find(forced.model);
-        if (model) {
-          lastRouted.set(key, forced.model);
-          log(`failover-router: ${key} continuing on ${forced.model} after an unretryable failure`);
-          return withLevel(model, forced.thinkingLevel ?? request.thinkingLevel);
-        }
-        log(`failover-router: ${forced.model} is not in the catalog; ignoring the rotation`);
-      }
-    }
-
-    // Everything else sticks to the model that last answered successfully,
-    // which keeps the prompt cache warm across tool follow-ups.
     const sticky = request.previous?.model ?? (lastRouted.get(key) ? find(lastRouted.get(key)) : undefined);
-    if (request.reason !== "user" && sticky) {
-      return withLevel(sticky, request.previous?.thinkingLevel ?? request.thinkingLevel);
-    }
-
     const ordered = chainFor(def);
-    // A new request is a fresh attempt, but not on a channel whose failure the
-    // human has already read: a manual resend that returns to the channel that
-    // just answered 400 makes the router look absent. Channels come back by
-    // themselves when their cooldown ends.
-    const now = Date.now();
-    const step = ordered.find((candidate) => (cooldowns.get(candidate.model) ?? 0) <= now) ?? ordered[0];
-    if (step !== ordered[0]) {
+    const step = request.reason !== "user" && sticky
+      ? ordered.find(step => step.model === `${sticky.provider}/${sticky.id}`)
+      : ordered.find(step => (cooldowns.get(step.model) ?? 0) <= Date.now()) ?? ordered[0];
+    const model = request.reason !== "user" && sticky ? sticky : step ? find(step.model) : undefined;
+    if (!model) return undefined;
+    if (step && step !== ordered[0] && request.reason === "user") {
       log(`failover-router: ${key} skips ${ordered[0].model} for this request; it is cooling after a failure`);
     }
-    const first = find(step.model);
-    if (!first) return undefined; // let Pi report the broken config
-    lastRouted.set(key, step.model);
-    return withLevel(first, step.thinkingLevel ?? request.thinkingLevel);
+    state.order ??= structuredClone(ordered);
+    const chosen = step ?? { model: `${model.provider}/${model.id}` };
+    dispatchRecovery(state, chosen);
+    state.dispatchToken = ++dispatchSerial;
+    state.failureKey = null;
+    lastRouted.set(key, chosen.model);
+    // A legacy continuation carries the previous response's level. Explicit
+    // chain levels remain authoritative for a new user request and retries.
+    const level = request.reason !== "user" && request.reason !== "retry"
+      ? request.previous?.thinkingLevel ?? request.thinkingLevel
+      : chosen.thinkingLevel ?? request.previous?.thinkingLevel ?? request.thinkingLevel;
+    return { ...withLevel(model, level), state: structuredClone(state) };
   };
 
   /** One initial publish per session, so a late-loading shell is never empty. */
@@ -355,116 +462,79 @@ export default function failoverRouter(pi) {
     log(`failover-router: registered ${key} (${def.chain.length} candidates)`);
   }
 
-  // ---- failures Pi refuses to retry -------------------------------------------
-  // A channel-owned failure that Pi's own allow-list does not recognise would end
-  // the run before `route()` is ever asked with `reason: "retry"`. Annotating the
-  // error at `message_end` puts it on that list, so Pi retries through its normal
-  // path and the chain rotates in `decideRoute`, the path the tests already cover.
-  pi.on?.("message_end", (event) => {
+  // ---- terminal takeover ----------------------------------------------------
+  // Native retries and the final settle takeover share this extension-owned plan.
+  pi.on?.("message_end", (event, ctx) => {
     const message = event?.message;
-    if (message?.role !== "assistant" || message.stopReason !== "error") return undefined;
-    const failedModel = `${message.provider}/${message.model}`;
-    const verdict = classifyFailure(message.errorMessage);
-    if (!verdict.rotate) return undefined;
-
-    // Only when the chain can actually go somewhere: rewriting the error while
-    // every other channel cools would retry the same broken channel.
-    const target = virtuals.find((def) => def.chain.some((step) => step.model === failedModel));
-    if (!target) return undefined;
-    const next = nextCandidate({ chain: chainFor(target), failedModel, cooldowns, now: Date.now() });
-    if (!next) return undefined;
-
-    const errorMessage = retryableErrorText(message.errorMessage);
-    if (!errorMessage) return undefined;
-    log(
-      `failover-router: ${virtualKey(target)} annotating ${failedModel} for Pi's retry — ${verdict.kind}: ` +
-        `${verdict.reason}; next ${next.model}`,
-    );
-    return { ...message, errorMessage };
+    if (message?.role !== "assistant") return undefined;
+    if (message.stopReason === "error") {
+      const ref = `${message.provider}/${message.model}`;
+      const def = selectedDefinition(ctx, ref);
+      if (!def) return undefined;
+      const verdict = classifyFailure(message.errorMessage);
+      if (!verdict.rotate) {
+        stopRecovery(virtualKey(def));
+        return undefined;
+      }
+      const state = recordChannelFailure(def, message, ref);
+      if (state.exhausted || !state.pending) return undefined;
+      const annotated = retryableErrorText(message.errorMessage);
+      return annotated ? { ...message, errorMessage: annotated } : undefined;
+    }
+    const ref = `${message.provider}/${message.model}`;
+    if (message.stopReason !== "aborted") noteSuccess(failureStreak, ref);
+    const def = selectedDefinition(ctx, ref);
+    if (def) {
+      const key = virtualKey(def);
+      if (message.stopReason === "aborted") stopRecovery(key);
+      else clearRecovery(key);
+    }
+    return undefined;
   });
 
-  // Pi ends the run without a retry when `isRetryableAssistantError` does not
-  // recognise the message, so `route()` is never asked with `reason: "retry"`.
-  // Those failures are exactly the ones this extension exists for, so take them
-  // over here: pick the next channel on `agent_end`, then ask the boundary for one
-  // more provider request. The timeout is short because it only schedules work.
   pi.on?.("agent_end", (event, ctx) => {
     const last = lastAssistantMessage(event?.messages);
     const failure = resolveDeadEnd(last);
-
-    // A channel that answered correctly starts over: its next failure waits the
-    // base cooldown instead of inheriting the backoff of an earlier bad patch.
-    if (!failure && last?.stopReason !== "error" && last?.provider && last?.model) {
-      noteSuccess(failureStreak, `${last.provider}/${last.model}`);
-    }
-    if (!failure || !failure.rotate) return;
-    const failedModel = `${failure.provider}/${failure.id}`;
-
-    // One failure decides one virtual: the one this session selected. Rotating
-    // every virtual that happens to contain the channel would spend the budget
-    // twice and log a decision that nobody uses.
-    const selected = ctx?.model;
-    const selectedKey = selected?.provider && selected?.id ? `${selected.provider}/${selected.id}` : undefined;
-
-    // Rotating a session that cannot consume the rotation would log a decision
-    // that never reaches a request.
-    const bypass = bypassReport(selected);
-    if (bypass) {
-      log(bypass);
+    const failedModel = `${last?.provider}/${last?.model}`;
+    const def = selectedDefinition(ctx, failedModel);
+    if (!def) {
+      const bypass = bypassReport(ctx?.model);
+      if (bypass) log(bypass);
       return;
     }
-    const target = selectedKey
-      ? virtuals.find((def) => `${def.provider}/${def.id}` === selectedKey)
-      : virtuals.find((def) => def.chain.some((step) => step.model === failedModel));
-    if (!target) return;
-    const key = `${target.provider}/${target.id}`;
-
-    const ordered = chainFor(target);
-    if (!ordered.some((step) => step.model === failedModel)) return;
-    const now = Date.now();
-    const streak = noteFailure(failureStreak, failedModel);
-    const waitMs = cooldownMs(failure.kind, streak);
-    cooldowns.set(failedModel, now + waitMs);
-    const next = nextCandidate({ chain: ordered, failedModel, cooldowns, now });
-    if (!next) {
-      log(
-        `failover-router: ${key} chain exhausted after ${failedModel} ` +
-          `(${Math.round(waitMs / 60_000)} min cooldown, attempt ${streak + 1})`,
-      );
+    if (!failure) {
+      const key = virtualKey(def);
+      if (last?.stopReason === "aborted") stopRecovery(key);
+      else if (last) {
+        clearRecovery(key);
+        noteSuccess(failureStreak, failedModel);
+      }
       return;
     }
-    forcedNext.set(key, next);
-    log(
-      `failover-router: ${key} taking over ${failedModel} — ${failure.kind}: ${failure.reason}; ` +
-        `next ${next.model}; ${Math.round(waitMs / 60_000)} min cooldown (attempt ${streak + 1})`,
-    );
+    if (!failure.rotate) stopRecovery(virtualKey(def));
+    else recordChannelFailure(def, last, failedModel);
   });
 
   pi.on?.("agent_before_settle", (event, ctx) => {
-    if (forcedNext.size === 0) return undefined;
-    // Only a failed run leaves a rotation pending; a completed one means the next
-    // request already consumed it.
     if (event?.outcome !== "error") return undefined;
-    // `route()` consumes a rotation keyed by the session's own virtual. Asking for a
-    // request the session cannot route would end on the same channel again, so a
-    // pending rotation for another virtual stays there for its own model.
     const selected = ctx?.model;
-    if (selected?.provider && selected?.id && !forcedNext.has(`${selected.provider}/${selected.id}`)) {
-      return undefined;
-    }
-    // `event.context` is built from the entries that exist before this handler runs,
-    // so after an assistant error it always reports `canContinue: false` — the exact
-    // case the takeover exists for. Pi commits the entries returned here and then
-    // rebuilds the context from the session, where the marker is a user message, so
-    // the continuation is valid. Asking the pre-entry context first disabled the
-    // takeover in precisely the failure it was written for.
+    const state = selected?.provider && selected?.id
+      ? recovery.get(`${selected.provider}/${selected.id}`)
+      : [...recovery.values()].find(state => state.pending);
+    if (!state?.pending || state.exhausted || state.stopped || ctx?.signal?.aborted) return undefined;
+    // One marker per dispatch. Returning the prior proposals preserves other
+    // extensions' entries. Pi rechecks canContinue after committing this marker.
+    const token = state.dispatchToken ?? "initial";
+    if (state.markerToken === token) return undefined;
+    state.markerToken = token;
     log("failover-router: asking Pi for one more request on the rotated channel");
     return {
       entries: [
+        ...(event.entries ?? []),
         {
           type: "custom_message",
           customType: "failover-router.continue",
-          content: "Retrying on another channel after a channel-owned failure.",
+          content: "Continue the current task on another channel. Use the existing tool results; do not repeat completed actions.",
           display: false,
         },
       ],
@@ -472,10 +542,16 @@ export default function failoverRouter(pi) {
     };
   });
 
-  pi.on?.("session_start", (event, ctx) => {
-    // A new or reloaded session starts with no remembered failures.
+  // A real new prompt is distinct from a boundary marker, which fires no input
+  // hooks. Clear exhausted episodes here, not on reason:user (markers use it too).
+  pi.on?.("before_agent_start", () => {
+    for (const key of recovery.keys()) clearRecovery(key);
+    for (const def of virtuals) resetRecovery.add(virtualKey(def));
+  });
+  pi.on?.("session_start", (_event, ctx) => {
     failureStreak.clear();
-    forcedNext.clear();
+    for (const key of recovery.keys()) clearRecovery(key);
+    for (const def of virtuals) resetRecovery.add(virtualKey(def));
     published = false;
     const bypass = bypassReport(ctx?.model);
     if (bypass) log(bypass);
