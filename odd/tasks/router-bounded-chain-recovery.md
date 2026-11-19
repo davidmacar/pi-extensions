@@ -1,0 +1,37 @@
+# Bounded chain recovery
+Implement provider-channel recovery in pi-failover-router only. Branch: feat/router-bounded-chain-recovery.
+Delivery: local work-unit commit; no push. Runner: node --test pi-failover-router/test/*.test.js.
+
+## Specs
+S1. "Necesito presentar una solución que solo afecte a la extensión de pi-failover-router sin llegar a tocar gentle-pi, refactoriza lel análisis para acomodarlo a esta extensión".
+S2. "Vale, y en caso de que todos los canales fallen, quiero que vuelva a intentar la cadena un máximo de 3 veces."
+S3. "Ok lleva a cabo esta implementación". Accepted interpretation from the preceding proposal: initial pass plus three repeats, one dispatch per channel per pass, cooldown-aware cancellable waits, one recovery episode shared by native retry and takeover, reset on valid response, no replay of completed tools, stop after exhaustion preserving the last provider diagnostic. Non-rotatable request failures and cancellation never start replay.
+
+## Allowed edit surfaces
+pi-failover-router/index.js
+pi-failover-router/lib/recovery.js
+pi-failover-router/README.md
+pi-failover-router/test/recovery.test.js
+pi-failover-router/test/router.test.js
+odd/tasks/router-bounded-chain-recovery.md
+
+## Tasks
+T1 | S1-S3 | inline/worker | completed | Commit f8715e1. Correction batch fixed B1-B3; focused 21/21 and full suite 180/180 pass. B4 physical-session bypass is intentional. Risk: item 3 (shared routing) and item 4 (overlapping lifecycle); independent recheck passed.
+T2 | S1-S3 | gentle-ai-verify | completed | Verified commit f8715e1 work unit. Scoped recheck mwnkugjc-6-oqqm passed B1-B3: 21 focused tests and 5 independent probes. Parent full suite 180/180 and whitespace check pass.
+
+## Log
+L1. Original request: "Ok lleva a cabo esta implementación".
+L2. Prior requirement verbatim: "Vale, y en caso de que todos los canales fallen, quiero que vuelva a intentar la cadena un máximo de 3 veces."
+L3. Prior scope verbatim: "Necesito presentar una solución que solo afecte a la extensión de pi-failover-router sin llegar a tocar gentle-pi, refactoriza lel análisis para acomodarlo a esta extensión".
+L4. Baseline cacd08500617e449f2a7cd4eeebbd598060ead61. Route supports Promise and request.signal; boundary must remain synchronous. Native retries and takeover must converge on the same episode. Expected authored diff about 600-800 lines including tests/docs; one coherent behavior, tests and docs kept together. No publishing requested.
+L5. Added public-hook tests first: 5/6 failed (four-pass budget, mixed native/takeover dedupe, cooldown wait/cancel worked; success-reset scenario setup failed). After implementation, all 6 focused recovery tests pass. Full suite then exposed legacy assumptions: synchronous routes, sticky thinking-level precedence, old unlimited cooldown behavior, and message annotation expectations. These remained open at the first handoff.
+L6. Compatibility diagnosis: continuation must prefer the prior response's thinking level; an unset dispatch token must still allow one settle marker. Old tests that repeatedly dispatched the last cooling channel contradict S2-S3, so they now assert complete bounded passes and asynchronous cooldown waits with fake time. The budget applies with or without persisted route state. Normal/direct routes remain synchronous; only measurement and actual cooldown waits return Promises. Router tests disable the optional shell patcher.
+L7. Additional public-hook regressions observed failing before fixes: abort must reject without returning a model; new prompts must cancel old waits and ignore stale persisted state; overlapping waiters must dispatch once; late cloned errors must not overwrite the current channel's plan; non-rotatable errors must clear takeover; native non-rotatable retry after message_end must retain its model and thinking level. Final focused run: node --test pi-failover-router/test/recovery.test.js — exit 0, 13 passed. Final full run: npm test --prefix pi-failover-router — exit 0, 172 passed, 0 failures/cancellations/skips, about 18.5 s. Earlier full runs exposed failures/timeouts during diagnosis; none remain in final verification.
+L8. Self-review: checked S1 scope, S2 four complete passes, S3 shared failure/marker dedupe, cooldowns on every recovery target, AbortError without dispatch on cancel, fresh user prompt reset, success reset, and exhaustion preserving the provider diagnostic. Continuation only adds an instruction using existing tool results; no tool executor is invoked by the extension. Model-generated future actions remain outside this guarantee. No commit; T2 disposition and commit remain parent-owned.
+L9. Independent verifier mwnjq8mx-4-tf1i: S1 and S2 met, S3 recheck requested for supplied model object preservation, second-waiter cancellation and shared cooldown extension. Physical-selected annotation removal accepted as intentional: no virtual route can consume such retries. Correction recheck remains parent-owned. No commit or publishing.
+L10. Correction RED: node --test pi-failover-router/test/recovery.test.js — exit 1, 15 passed/6 failed. Failures: second waiter lacked rejection (B1); original cooldown dispatched early and extended wait could no longer abort (B2); direct, continuation and retry replaced physical overrides (B3). B4 and lifecycle-preservation tests passed.
+L11. Correction GREEN: node --test pi-failover-router/test/recovery.test.js — exit 0, 21 passed/0 failed, about 0.55 s. npm test --prefix pi-failover-router — exit 0, 180 passed/0 failed/cancelled/skipped, about 20.6 s, foreground timeout 30 s. B1-B3 fixed. B4 intentionally remains physical-session bypass with no annotation/takeover; documented and tested. Custom continuation keeps its pass; before_agent_start reset remains for real prompts. Verifier scratch was read-only; no commit and no gentle-pi edits.
+L12. Parent spot-check after correction: focused 21/21, npm suite 180/180, git diff --check exit 0. Independent scoped recheck mwnkugjc-6-oqqm launched for B1-B3 only; no new full sweep.
+L13. Independent scoped recheck passed: latest isolated copy, focused 21/21, independent B1/B2/B3 probes 5/5. S1 met; S2 met in focused suite; S3 previously reported blockers resolved. B4 is intentional physical-model bypass. No source changes by verifier. Real-provider integration and real-session shared-cooldown overlap were not exercised. Initial RED failures and diagnostic timeouts remain historical evidence, not passing checks.
+L14. Local work-unit scope: roughly 1,000 authored changed lines including tests, one coherent routing behavior kept with its tests and docs rather than split into nonfunctional file-type commits. Rollback boundary is the five changed pi-failover-router files; no gentle-pi source or configuration changed. Runtime check uses public ExtensionAPI hooks with fake time, not live providers. Risk: item 3 (shared routing/model contracts) and item 4 (overlapping waits/lifecycle); independent verification passed. No publishing.
+L15. Local implementation commit f8715e1 (987 authored changed lines, 5 files) is the slice boundary; one inseparable routing behavior with tests/docs. Delivery shape remains undecided until publishing is requested. Branch feat/router-bounded-chain-recovery; no push. This tracking document is a separate passive closure record.
