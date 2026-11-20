@@ -43,7 +43,10 @@ cannot tell, because it only reads the label. This extension reads the raw messa
   of spending three identical requests. The channel still cools down, so flagged content is not
   resent to it immediately. If every channel refuses the same prompt the budget ends the episode
   with the provider's own moderation text, which is the honest outcome — the content, not the
-  channel, was refused;
+  channel, was refused. The rule requires a rejection signal and is evaluated **after** the
+  transport, credential and quota rules, so a policy *noun* (`Unknown parameter: 'content_policy'`,
+  a safety-filter configuration error) never rotates, and a moderation *service* that is down, rate
+  limited or unauthorised keeps its own kind and its own cooldown;
 - **bounds recovery to four full passes per failure episode:** the initial pass plus at most
   three repeats. Each channel is dispatched at most once in a pass, including when Pi's native
   retry policy and the router's terminal takeover both see the failure. The pass order is

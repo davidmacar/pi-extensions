@@ -27,17 +27,6 @@ const RULES = [
       /requires responses|only supports chat completions|does not support|not supported by this (?:account|channel)|无可用渠道|bad_response_status_code/i,
   },
   {
-    // Provider moderation refused the content itself. Which text a gateway will
-    // relay depends on the upstream behind it, so another channel can serve what
-    // this one refused. The same prompt on the same channel fails identically,
-    // so this kind is never annotated for Pi's native retry: the takeover path
-    // advances the chain instead of spending three identical requests.
-    kind: "content_policy",
-    annotate: false,
-    pattern:
-      /flagged as potentially violating|violat\w*(?:\s+of)?\s+(?:our|the)\s+(?:usage|content)\s+polic|(?:usage|content)[_ ]polic(?:y|ies)(?![_a-z])|moderation[_ ]?(?:blocked|flagged|failed)|safety[_ ]?(?:filter|polic)/i,
-  },
-  {
     // Stream died after the response started.
     kind: "incomplete_stream",
     pattern:
@@ -62,6 +51,24 @@ const RULES = [
   {
     kind: "timeout",
     pattern: /time.?out|timed out|deadline exceeded|504|408/i,
+  },
+  {
+    // Provider moderation refused the content itself. Which text a gateway will
+    // relay depends on the upstream behind it, so another channel can serve what
+    // this one refused. The same prompt on the same channel fails identically,
+    // so this kind is never annotated for Pi's native retry: the takeover path
+    // advances the chain instead of spending three identical requests.
+    //
+    // Deliberately placed after the transport, credential and quota rules: a
+    // moderation *service* that is down, rate limited or unauthorised is that
+    // failure, not a content rejection, and must keep its own kind and cooldown.
+    // The pattern requires a rejection signal, so a policy *noun* alone (an
+    // unknown parameter named `content_policy`, a safety-filter configuration
+    // error) never rotates.
+    kind: "content_policy",
+    annotate: false,
+    pattern:
+      /flagged as potentially violating|polic(?:y|ies)[_ ]?violation|violat\w*(?:\s+(?:of|against))?\s+(?:our|the|these)\s+(?:usage|content|safety)\s+polic|(?:rejected|blocked|refused|denied|filtered)\b[^.]{0,80}\b(?:usage|content|safety)\s+polic|(?:usage|content|safety)\s+polic\w*\b[^.]{0,40}\b(?:rejected|blocked|refused|denied)|moderation[_ ]?(?:blocked|flagged)|safety[_ ]?filter\b[^.]{0,60}\b(?:blocked|rejected|triggered)/i,
   },
   {
     kind: "provider_unavailable",

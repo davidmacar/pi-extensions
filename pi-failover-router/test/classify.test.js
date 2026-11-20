@@ -112,6 +112,65 @@ test("a policy mention inside a malformed request still never rotates", () => {
   assert.equal(r, false);
 });
 
+// --- A policy noun is not a content rejection -------------------------------
+// These were all reported by independent verification as unintended rotations
+// when the moderation rule matched bare policy nouns.
+
+for (const text of [
+  "400 invalid_request_error: Unknown parameter: 'content_policy'",
+  "400 Bad Request: Invalid safety_filter value 'disabled'; expected 'standard' or 'strict'.",
+  "400 invalid_prompt: messages[0].content must be a string. See content policy documentation.",
+  "400 invalid_request_error: Unsupported input type: content policy evaluation accepts text only.",
+  "400 safety filter configuration must be an object, not a string.",
+  "Error: moderation failed to initialize: configuration missing.",
+  "Error: content policy service health check failed",
+]) {
+  test(`a policy noun is not a rejection: ${text.slice(0, 46)}`, () => {
+    assert.equal(classifyFailure(text).rotate, false);
+  });
+}
+
+// --- A broken moderation service is that failure, not a rejection -----------
+// Each of these rotated before the moderation rule existed and must keep its
+// own kind and its own cooldown; only the kind controls how long a channel cools.
+
+for (const [text, kind] of [
+  ["500 moderation_failed: moderation service encountered an internal error", "provider_unavailable"],
+  ["503 Service Unavailable: content policy service unavailable", "provider_unavailable"],
+  ["504 Gateway Timeout: safety filter service timed out", "timeout"],
+  ["429 rate limit exceeded for content policy checks", "rate_limit"],
+  ["401 Unauthorized: invalid API key for safety filter service", "auth"],
+  ["403 Account suspended for violation of our usage policy", "auth"],
+  ["403 Forbidden by organizational content policy: model access disabled", "auth"],
+  ["402 insufficient quota for safety filter requests", "quota"],
+  ["ECONNRESET connecting to safety filter service", "network"],
+  ["499 upstream stream read failed before completion in safety filter proxy", "incomplete_stream"],
+]) {
+  test(`a failing moderation service keeps kind ${kind}: ${text.slice(0, 42)}`, () => {
+    const r = classifyFailure(text);
+    assert.equal(r.kind, kind);
+    assert.equal(r.annotate, true, "these kinds still buy Pi's native retry");
+  });
+}
+
+// --- Real rejection wording still rotates as moderation ---------------------
+
+for (const text of [
+  "400 invalid_request_error: Your request was rejected due to a violation of our content policy.",
+  "400 ResponsibleAIPolicyViolation: The response was filtered because the prompt triggered the content policy.",
+  "400 moderation_blocked: Prompt rejected for unsafe content.",
+  "400 safety_filter: Input content blocked by the safety filter.",
+  "400 Your prompt was rejected for violating the usage policies.",
+  "400 Request rejected: usage_policy_violation",
+]) {
+  test(`real rejection wording rotates: ${text.slice(0, 46)}`, () => {
+    const r = classifyFailure(text);
+    assert.equal(r.rotate, true);
+    assert.equal(r.kind, "content_policy");
+    assert.equal(r.annotate, false);
+  });
+}
+
 // --- Candidate selection ---------------------------------------------------
 
 const CHAIN = [
