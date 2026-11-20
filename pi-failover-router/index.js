@@ -478,6 +478,10 @@ export default function failoverRouter(pi) {
       }
       const state = recordChannelFailure(def, message, ref);
       if (state.exhausted || !state.pending) return undefined;
+      // A deterministic rejection (provider moderation) fails identically on the
+      // channel that just refused it, so buying Pi's native retry would spend
+      // three identical requests there. The takeover path advances the chain.
+      if (verdict.annotate === false) return undefined;
       const annotated = retryableErrorText(message.errorMessage);
       return annotated ? { ...message, errorMessage: annotated } : undefined;
     }

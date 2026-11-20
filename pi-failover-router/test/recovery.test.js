@@ -120,6 +120,27 @@ test("cooldown wait rejects on cancellation without dispatching or continuing", 
   assert.equal(r.boundary(), undefined);
 });
 
+test("provider moderation advances the chain instead of retrying the same channel", async t => {
+  const r = runtime(t, ["a", "b"]);
+  const moderation =
+    "Error: Invalid prompt: your prompt was flagged as potentially violating our usage policy. " +
+    "Please try again with a different prompt: https://platform.openai.com/docs/guides/error-codes/api-errors";
+  const tried = [];
+  for (let i = 0; i < 8; i++) {
+    const provider = await r.send(i === 0 ? "user" : "continuation");
+    tried.push(provider);
+    const message = {
+      role: "assistant", provider, model: "model", stopReason: "error",
+      errorMessage: moderation, timestamp: 900 + i,
+    };
+    const replaced = r.fire("message_end", { message }).find(Boolean);
+    assert.equal(replaced, undefined, `attempt ${i + 1} must not buy a same-channel retry`);
+    r.fire("agent_end", { messages: [message] });
+    assert.equal(r.boundary()?.continue, i < 7 ? true : undefined, `attempt ${i + 1}`);
+  }
+  assert.deepEqual(tried, [...Array(4)].flatMap(() => ["a", "b"]));
+});
+
 test("success starts a new recovery episode without resetting the session", async t => {
   const r = runtime(t, ["a"]);
   await r.send("user");

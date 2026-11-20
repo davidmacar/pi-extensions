@@ -27,6 +27,17 @@ const RULES = [
       /requires responses|only supports chat completions|does not support|not supported by this (?:account|channel)|无可用渠道|bad_response_status_code/i,
   },
   {
+    // Provider moderation refused the content itself. Which text a gateway will
+    // relay depends on the upstream behind it, so another channel can serve what
+    // this one refused. The same prompt on the same channel fails identically,
+    // so this kind is never annotated for Pi's native retry: the takeover path
+    // advances the chain instead of spending three identical requests.
+    kind: "content_policy",
+    annotate: false,
+    pattern:
+      /flagged as potentially violating|violat\w*(?:\s+of)?\s+(?:our|the)\s+(?:usage|content)\s+polic|(?:usage|content)[_ ]polic(?:y|ies)(?![_a-z])|moderation[_ ]?(?:blocked|flagged|failed)|safety[_ ]?(?:filter|polic)/i,
+  },
+  {
     // Stream died after the response started.
     kind: "incomplete_stream",
     pattern:
@@ -74,6 +85,7 @@ const NEVER_ROTATE = [
 /** Kinds that justify spending another call on a different model. */
 const ROTATABLE = new Set([
   "channel_capability",
+  "content_policy",
   "incomplete_stream",
   "network",
   "rate_limit",
@@ -98,7 +110,12 @@ export function classifyFailure(errorMessage) {
   }
   for (const rule of RULES) {
     if (rule.pattern.test(text)) {
-      return { rotate: ROTATABLE.has(rule.kind), kind: rule.kind, reason: `matched ${rule.kind}` };
+      return {
+        rotate: ROTATABLE.has(rule.kind),
+        kind: rule.kind,
+        reason: `matched ${rule.kind}`,
+        annotate: rule.annotate !== false,
+      };
     }
   }
   return { rotate: false, kind: "unknown", reason: "no rule matched; refusing to rotate on an unknown failure" };

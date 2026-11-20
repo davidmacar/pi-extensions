@@ -27,6 +27,33 @@ test("incomplete_stream marker alone rotates", () => {
   assert.equal(r.kind, "incomplete_stream");
 });
 
+// --- Provider moderation is channel-owned, but deterministic per channel ----
+
+const MODERATION =
+  "Error: Invalid prompt: your prompt was flagged as potentially violating our usage policy. " +
+  "Please try again with a different prompt: https://platform.openai.com/docs/guides/error-codes/api-errors";
+
+test("a prompt flagged by provider moderation rotates to another channel", () => {
+  const r = classifyFailure(MODERATION);
+  assert.equal(r.rotate, true);
+  assert.equal(r.kind, "content_policy");
+});
+
+test("moderation is not annotated for a same-channel retry", () => {
+  // The identical prompt fails identically on the channel that just refused it,
+  // so the annotation that buys Pi's native retry would only spend three
+  // identical requests. The takeover path advances the chain instead.
+  assert.equal(classifyFailure(MODERATION).annotate, false);
+});
+
+test("an invalid prompt without a policy signal is not moderated content", () => {
+  assert.equal(classifyFailure("400 invalid_prompt: messages[0] must be a string").rotate, false);
+});
+
+test("moderation cools like a transient channel, never like exhausted credentials", () => {
+  assert.equal(cooldownMs("content_policy"), 2 * 60_000);
+});
+
 // --- Transient transport / provider trouble still rotates -------------------
 
 test("provider outage rotates", () => {
@@ -78,6 +105,11 @@ test("empty error never rotates", () => {
 
 test("non-string error never rotates", () => {
   assert.equal(classifyFailure({ message: "boom" }).rotate, false);
+});
+
+test("a policy mention inside a malformed request still never rotates", () => {
+  const r = classifyFailure("400 missing required field: messages [content policy]").rotate;
+  assert.equal(r, false);
 });
 
 // --- Candidate selection ---------------------------------------------------

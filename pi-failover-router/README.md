@@ -12,12 +12,13 @@ fallback chain:
 quota · auth · rate_limit · provider_unavailable · timeout · network
 ```
 
-Everything else stops the run where it is. Two real channel defects land in the dead zone:
+Everything else stops the run where it is. Three real channel defects land in the dead zone:
 
 | Observed error | Pi category | Chain moves? |
 | --- | --- | --- |
 | `<model> requires Responses for tool calls; this account only supports Chat Completions` (400, `invalid_request_error`) | `invalid_request` | **no** |
 | `status_code=499, upstream stream read failed before completion: http2: response body closed` | generic `unavailable` (no keyword matches) | **no** |
+| `Invalid prompt: your prompt was flagged as potentially violating our usage policy.` (400, `invalid_request_error`) | `invalid_request` | **no** |
 
 Both are **channel** problems: the same model on another channel works. The classifier
 cannot tell, because it only reads the label. This extension reads the raw message instead.
@@ -35,6 +36,14 @@ cannot tell, because it only reads the label. This extension reads the raw messa
   final-settle takeover. For a terminal error, `agent_end` records the next eligible channel;
   `agent_before_settle` requests one continuation. This also handles errors that do not match
   Pi's retry allow-list, such as `upstream stream read failed before completion: http2: response body closed`;
+- **treats provider moderation as a channel difference, not a request defect:** a prompt refused by
+  the upstream behind one channel can be served by another, so `content_policy` rotates. It is the
+  one rotating kind that is **not** annotated for Pi's native retry, because the identical prompt on
+  the channel that just refused it fails identically: the takeover path advances the chain instead
+  of spending three identical requests. The channel still cools down, so flagged content is not
+  resent to it immediately. If every channel refuses the same prompt the budget ends the episode
+  with the provider's own moderation text, which is the honest outcome — the content, not the
+  channel, was refused;
 - **bounds recovery to four full passes per failure episode:** the initial pass plus at most
   three repeats. Each channel is dispatched at most once in a pass, including when Pi's native
   retry policy and the router's terminal takeover both see the failure. The pass order is
