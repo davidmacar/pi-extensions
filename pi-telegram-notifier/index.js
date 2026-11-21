@@ -1,6 +1,7 @@
 import { ALLOWED_USERNAME, DEFAULT_CONFIG_PATH, loadConfig, normalizeConfig, saveConfig } from "./lib/config.js";
 import { createTelegramClient } from "./lib/telegram.js";
 import { activeSubagents } from "./lib/subagents.js";
+import { buildPromptNotice, buildSettledNotice } from "./lib/notice.js";
 
 const interactive = ctx => ctx?.mode === "tui" && ctx.hasUI === true;
 const authorized = (chat, id) => chat?.type === "private" && String(chat.id) === id &&
@@ -24,13 +25,23 @@ export default function telegramWaitNotifier(pi, {
     return { config, client: config.botToken ? makeClient({ token: config.botToken }) : undefined };
   };
 
-  async function send(text, ctx, current = binding, expectedGeneration = generation, stillWaiting = () => true) {
+  const noticeContext = (ctx) => {
+    let sessionName;
+    try {
+      const getSessionName = ctx?.sessionManager?.getSessionName;
+      sessionName = typeof getSessionName === "function" ? getSessionName.call(ctx.sessionManager) : undefined;
+    } catch { sessionName = undefined; }
+    return { sessionName, cwd: ctx?.cwd };
+  };
+
+  async function send(textOrBuilder, ctx, current = binding, expectedGeneration = generation, stillWaiting = () => true) {
     if (!alive || !interactive(ctx) || !current?.config.botToken || !current.config.chatId) return false;
     try {
       const { config, client } = current;
       const chat = await client.getChat(config.chatId, requestController.signal);
       if (!alive || expectedGeneration !== generation || !stillWaiting()) return false;
       if (!authorized(chat, config.chatId)) throw new Error("identity mismatch");
+      const text = typeof textOrBuilder === "function" ? textOrBuilder(noticeContext(ctx)) : String(textOrBuilder);
       await client.sendMessage(config.chatId, text, requestController.signal);
       return true;
     } catch {
@@ -99,7 +110,7 @@ export default function telegramWaitNotifier(pi, {
   pi.on("agent_start", () => { noticeSent = false; });
   pi.on("ui_prompt_start", async (_event, ctx) => {
     promptOpen = true;
-    await send("Pi necesita tu respuesta a una pregunta o formulario. Abre Pi para responder y continuar.", ctx, binding, generation, () => promptOpen);
+    await send(buildPromptNotice, ctx, binding, generation, () => promptOpen);
   });
   pi.on("ui_prompt_end", () => { promptOpen = false; });
   pi.on("agent_settled", async (event, ctx) => {
@@ -110,7 +121,7 @@ export default function telegramWaitNotifier(pi, {
       return;
     }
     noticePending = true;
-    try { noticeSent = await send("El agente de Pi ha terminado su trabajo y está a la espera de tu input. Abre Pi para continuar.", ctx, binding, generation, () => ctx.isIdle() && !promptOpen && activeSubagents(pi, ctx) === 0); }
+    try { noticeSent = await send(buildSettledNotice, ctx, binding, generation, () => ctx.isIdle() && !promptOpen && activeSubagents(pi, ctx) === 0); }
     finally { noticePending = false; }
   });
 }

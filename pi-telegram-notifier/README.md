@@ -1,6 +1,6 @@
 # Pi Telegram wait notifications
 
-Sends short Spanish Telegram alerts to the private account **@MacDamon15** when Pi asks for input or finishes a run. Responses remain in Pi, as selected during setup. No agent output, question bodies, prompt titles or buttons are sent.
+Sends short Spanish Telegram alerts to the private account **@MacDamon15** when Pi asks for input or finishes a run. Every notice includes Pi's current session name (or `sin nombre`), working directory, and expected input kind: `respuesta a preguntas del agente` for a prompt or `terminación de las acciones del agente` for a settled run. Long names and paths are truncated to stay within Telegram's 4096-character limit; the kind and instruction to respond in Pi remain intact. Responses remain in Pi, as selected during setup. No agent output, question bodies, prompt titles or buttons are sent.
 
 ## Activate
 
@@ -26,8 +26,8 @@ If setup cannot find a recent start, send it again and retry. Pending updates ma
 
 ## What triggers a notice
 
-- `ui_prompt_start` sends a fixed message asking you to open Pi. There is no remote answer path. Finishing that prompt and later finishing the task produces a separate completion notice.
-- `agent_settled` is the final idle boundary, unlike `agent_end`. Aborted runs, open prompts, duplicate settlements and headless JSON/print child sessions do not produce completion notices. Only interactive TUI sessions participate.
+- `ui_prompt_start` sends a fixed message asking you to open Pi, labeled `respuesta a preguntas del agente`. There is no remote answer path. Finishing that prompt and later finishing the task produces a separate completion notice.
+- `agent_settled` is the final idle boundary, unlike `agent_end`; its notice is labeled `terminación de las acciones del agente`. Aborted runs, open prompts, duplicate settlements and headless JSON/print child sessions do not produce completion notices. Only interactive TUI sessions participate.
 - Each send rechecks that `getChat` returns the pinned private chat and the allowed username. API calls time out after eight seconds, reject redirects and expose only generic errors locally. There is no automatic resend, avoiding duplicate Telegram messages.
 
 ## Subagents

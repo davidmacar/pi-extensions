@@ -4,6 +4,9 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import telegramWaitNotifier from "../index.js";
 
+const PROMPT_KIND = "respuesta a preguntas del agente";
+const SETTLED_KIND = "terminación de las acciones del agente";
+
 const CONFIG = { botToken: "123:dummy", chatId: "42", allowedUsername: "MacDamon15" };
 const CHAT = { id: 42, type: "private", username: "MacDamon15" };
 const start = (chat = CHAT, from = { id: 42, username: "MacDamon15", is_bot: false }) =>
@@ -12,7 +15,8 @@ const start = (chat = CHAT, from = { id: 42, username: "MacDamon15", is_bot: fal
 function host({ config = CONFIG, updates = [], chat = CHAT, failSend = false, tools = [], bus } = {}) {
   const events = new Map(); const commands = new Map(); const sent = []; const saved = []; const ui = [];
   let readCount = 0;
-  const ctx = { mode: "tui", hasUI: true, isIdle: () => true, sessionManager: { getSessionId: () => "parent" },
+  const ctx = { mode: "tui", hasUI: true, cwd: "/repo/pi", isIdle: () => true,
+    sessionManager: { getSessionId: () => "parent", getSessionName: () => "sesión actual" },
     ui: { notify: (...args) => ui.push(args) } };
   const pi = { on: (name, fn) => events.set(name, fn), registerCommand: (name, command) => commands.set(name, command), getAllTools: () => tools, events: bus };
   telegramWaitNotifier(pi, {
@@ -38,6 +42,9 @@ test("settled notices contain no assistant text; abort, busy and child modes sta
   assert.equal(h.events.has("agent_end"), false);
   await h.fire("agent_settled", { aborted: false, text: "PRIVATE OUTPUT" });
   assert.equal(h.sent.length, 1); assert.doesNotMatch(h.sent[0].text, /PRIVATE OUTPUT/);
+  assert.match(h.sent[0].text, /Nombre de sesión: sesión actual/);
+  assert.match(h.sent[0].text, /Ruta de trabajo: \/repo\/pi/);
+  assert.match(h.sent[0].text, new RegExp(`Tipo de input esperado: ${SETTLED_KIND}`));
   await h.fire("agent_settled", { aborted: true });
   await h.fire("agent_settled", {}, { ...h.ctx, isIdle: () => false });
   await h.fire("agent_settled", {}, { ...h.ctx, mode: "json", hasUI: false });
@@ -47,9 +54,23 @@ test("settled notices contain no assistant text; abort, busy and child modes sta
 test("a prompt and the subsequent completion both notify; open prompts suppress idle duplicates", async () => {
   const h = host(); await h.fire("session_start"); await h.fire("agent_start");
   await h.fire("ui_prompt_start", { kind: "confirm", title: "PRIVATE TITLE" });
+  assert.match(h.sent[0].text, /Nombre de sesión: sesión actual/);
+  assert.match(h.sent[0].text, /Ruta de trabajo: \/repo\/pi/);
+  assert.match(h.sent[0].text, new RegExp(`Tipo de input esperado: ${PROMPT_KIND}`));
   await h.fire("agent_settled", {}); assert.equal(h.sent.length, 1);
   await h.fire("ui_prompt_end"); await h.fire("agent_settled", {});
   assert.equal(h.sent.length, 2); assert.doesNotMatch(h.sent[0].text, /PRIVATE TITLE/);
+});
+
+test("renames are reflected and a manager without getSessionName cannot break notices", async () => {
+  const h = host(); await h.fire("session_start");
+  h.ctx.sessionManager.getSessionName = () => "renombrada";
+  await h.fire("ui_prompt_start", {});
+  assert.match(h.sent[0].text, /Nombre de sesión: renombrada/);
+
+  const noName = host(); noName.ctx.sessionManager = { getSessionId: () => "parent" };
+  await noName.fire("session_start"); await noName.fire("agent_settled", {});
+  assert.match(noName.sent[0].text, /Nombre de sesión: sin nombre/);
 });
 
 test("send-time identity check prevents delivery to a group or another user", async () => {
@@ -71,7 +92,9 @@ test("setup rejects strangers, groups, forwarded starts and mismatched sender ID
 
 test("setup pins the verified private chat and leaves an existing binding intact on failure", async () => {
   const h = host({ config: { ...CONFIG, chatId: "" }, updates: [start()] });
-  await h.fire("session_start"); await h.command("setup"); assert.equal(h.saved.length, 1); assert.equal(h.saved[0].chatId, "42");
+  await h.fire("session_start"); await h.command("setup"); assert.equal(h.saved.length, 1);
+  assert.match(h.sent[0].text, /activados/);
+  assert.doesNotMatch(h.sent[0].text, /Tipo de input esperado/); assert.equal(h.saved[0].chatId, "42");
   assert.equal(h.sent.length, 1);
   const failed = host(); await failed.fire("session_start"); await failed.command("setup");
   await failed.fire("agent_settled", {}); assert.equal(failed.saved.length, 0); assert.equal(failed.sent.length, 1);
