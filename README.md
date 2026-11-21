@@ -9,6 +9,7 @@ Git history; each extension is self-contained inside its own folder with its own
 | Extension | What it does |
 | --- | --- |
 | [`pi-failover-router`](./pi-failover-router) | Registers **virtual models** that fail over across channels when the failure is owned by the provider rather than by the request. Reads the raw error message instead of Pi's category, so channel defects such as a 400 `invalid_request_error` on tool calls or a `499 stream read failed` still rotate the chain. |
+| [`pi-telegram-notifier`](./pi-telegram-notifier) | Sends private Telegram notifications when Pi opens a UI prompt or settles awaiting user input. |
 
 ## Install an extension
 
