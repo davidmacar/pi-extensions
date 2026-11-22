@@ -12,7 +12,15 @@ const CHAT = { id: 42, type: "private", username: "MacDamon15" };
 const start = (chat = CHAT, from = { id: 42, username: "MacDamon15", is_bot: false }) =>
   ({ update_id: 10, message: { text: "/start", chat, from } });
 
-function host({ config = CONFIG, updates = [], chat = CHAT, failSend = false, tools = [], bus } = {}) {
+function taskBus(tasks = []) {
+  const emitter = new EventEmitter();
+  emitter.on("gentle-pi:herdr-desktop:tasks-request", ({ sessionId }) =>
+    emitter.emit("gentle-pi:herdr-desktop:tasks", { sessionId, tasks }));
+  return { emit: (name, data) => emitter.emit(name, data),
+    on(name, fn) { emitter.on(name, fn); return () => emitter.off(name, fn); } };
+}
+
+function host({ config = CONFIG, updates = [], chat = CHAT, failSend = false, tools = [], bus = taskBus() } = {}) {
   const events = new Map(); const commands = new Map(); const sent = []; const saved = []; const ui = [];
   let readCount = 0;
   const ctx = { mode: "tui", hasUI: true, cwd: "/repo/pi", isIdle: () => true,
@@ -101,10 +109,46 @@ test("setup pins the verified private chat and leaves an existing binding intact
 });
 
 test("unknown background subagent state suppresses completion but not input notices", async () => {
-  const h = host({ tools: [{ name: "subagent_run" }] }); await h.fire("session_start");
+  const h = host({ tools: [{ name: "subagent_run" }], bus: null }); await h.fire("session_start");
   await h.fire("agent_settled", {}); assert.equal(h.sent.length, 0);
   await h.fire("ui_prompt_start", {}); assert.equal(h.sent.length, 1);
   assert.ok(h.ui.some(([text]) => /subagent/i.test(text)));
+});
+
+test("completion consults active child state even without a recognized spawner tool", async () => {
+  for (const tools of [[{ name: "codemode" }], [{ name: "read" }], []]) {
+    for (const status of ["queued", "running", "waiting"]) {
+      const emitter = new EventEmitter(); let tasks = [{ status }]; let requests = 0;
+      const bus = { emit: (name, data) => emitter.emit(name, data),
+        on(name, fn) { emitter.on(name, fn); return () => emitter.off(name, fn); } };
+      emitter.on("gentle-pi:herdr-desktop:tasks-request", ({ sessionId }) => {
+        requests++; emitter.emit("gentle-pi:herdr-desktop:tasks", { sessionId, tasks });
+      });
+      const h = host({ tools, bus }); await h.fire("session_start");
+      await h.fire("agent_settled", {});
+      assert.equal(h.sent.length, 0, "Delegated work must suppress completion");
+      assert.equal(requests, 1, "Completion must request a fresh task snapshot");
+      assert.equal(h.saved.length, 0); assert.deepEqual(h.config, CONFIG);
+      await h.fire("ui_prompt_start", { kind: "confirm" });
+      assert.equal(h.sent.length, 1); assert.match(h.sent[0].text, new RegExp(PROMPT_KIND));
+      assert.equal(requests, 1, "Question notices must remain independent of child activity");
+      await h.fire("ui_prompt_end"); tasks = [];
+      await h.fire("agent_settled", {});
+      assert.equal(h.sent.length, 2); assert.match(h.sent[1].text, new RegExp(SETTLED_KIND));
+      assert.equal(requests, 3, "Completion rechecks the empty snapshot before sending");
+      await h.fire("agent_settled", {}); assert.equal(h.sent.length, 2);
+      await h.fire("session_shutdown");
+    }
+  }
+});
+
+test("missing publisher suppresses completion even with no recognized spawner", async () => {
+  const h = host({ tools: [{ name: "read" }], bus: null }); await h.fire("session_start");
+  await h.fire("agent_settled", {}); assert.equal(h.sent.length, 0);
+  assert.ok(h.ui.some(([text]) => /subagents cannot be confirmed/.test(text)));
+  await h.fire("ui_prompt_start", {});
+  assert.equal(h.sent.length, 1); assert.match(h.sent[0].text, new RegExp(PROMPT_KIND));
+  assert.equal(h.saved.length, 0); assert.deepEqual(h.config, CONFIG);
 });
 
 test("Gentle active tasks suppress completion until a fresh empty snapshot arrives", async () => {
@@ -151,8 +195,8 @@ test("task labels, prompts, titles, and agent text never leave Pi", async () => 
 test("setup storage failure preserves the existing working binding and reports failure", async () => {
   const events = new Map(); const commands = new Map(); const sent = []; const messages = [];
   const ctx = { mode: "tui", hasUI: true, isIdle: () => true,
-    ui: { notify: text => messages.push(text) } };
-  telegramWaitNotifier({ on: (n, f) => events.set(n, f), registerCommand: (n, c) => commands.set(n, c), getAllTools: () => [] }, {
+    sessionManager: { getSessionId: () => "parent" }, ui: { notify: text => messages.push(text) } };
+  telegramWaitNotifier({ on: (n, f) => events.set(n, f), registerCommand: (n, c) => commands.set(n, c), getAllTools: () => [], events: taskBus() }, {
     readConfig: () => CONFIG, persistConfig() { throw new Error("dummy write failed"); },
     makeClient: () => ({ getUpdates: async () => [start()], getChat: async () => CHAT,
       sendMessage: async (_id, text) => sent.push(text) }),
@@ -165,8 +209,9 @@ test("setup storage failure preserves the existing working binding and reports f
 
 test("completed prompts and resumed work do not receive a stale wait notice", async () => {
   const events = new Map(); const sent = []; let resolveChat;
-  const ctx = { mode: "tui", hasUI: true, isIdle: () => true, ui: { notify() {} } };
-  telegramWaitNotifier({ on: (n, f) => events.set(n, f), registerCommand() {}, getAllTools: () => [] }, {
+  const ctx = { mode: "tui", hasUI: true, isIdle: () => true,
+    sessionManager: { getSessionId: () => "parent" }, ui: { notify() {} } };
+  telegramWaitNotifier({ on: (n, f) => events.set(n, f), registerCommand() {}, getAllTools: () => [], events: taskBus() }, {
     readConfig: () => CONFIG, makeClient: () => ({ getChat: () => new Promise(resolve => { resolveChat = resolve; }),
       sendMessage: async (_id, text) => sent.push(text) }),
   });

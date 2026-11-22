@@ -16,10 +16,24 @@ function fixture(snapshot) {
   return { emitter, pi: { events: eventsFor(emitter), getAllTools: () => [{ name: "subagent_run" }] } };
 }
 
-test("plain Pi without subagent tools has no child work; unknown tools state fails closed", () => {
-  assert.equal(activeSubagents({ getAllTools: () => [{ name: "read" }] }, ctx), 0);
+test("missing task publishers never establish zero active children", () => {
+  assert.equal(activeSubagents({ getAllTools: () => [{ name: "read" }] }, ctx), undefined);
   assert.equal(activeSubagents({}, ctx), undefined);
   assert.equal(activeSubagents({ getAllTools: () => [{ name: "subagent_run" }] }, ctx), undefined);
+});
+
+test("snapshots are consulted regardless of the registered tool names", () => {
+  for (const tools of [[{ name: "codemode" }], [{ name: "read" }], []]) {
+    const h = fixture({ sessionId: "parent", tasks: [{ status: "running" }] });
+    h.pi.getAllTools = () => tools;
+    assert.equal(activeSubagents(h.pi, ctx), 1);
+    assert.equal(h.emitter.listenerCount(TASKS), 0);
+  }
+  const h = fixture({ sessionId: "parent", tasks: [] });
+  h.pi.getAllTools = () => { throw new Error("Tool registry must not be queried"); };
+  assert.equal(activeSubagents(h.pi, ctx), 0);
+  delete h.pi.getAllTools;
+  assert.equal(activeSubagents(h.pi, ctx), 0);
 });
 
 test("Gentle snapshots count queued, running and waiting as active, with listener cleanup", () => {

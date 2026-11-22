@@ -5,12 +5,6 @@ const FINISHED = new Set(["completed", "failed", "cancelled", "timed_out"]);
 
 /** Ask Gentle's display publisher for a fresh active-only snapshot of this session. */
 export function activeSubagents(pi, ctx) {
-  if (typeof pi.getAllTools !== "function") return undefined;
-  let tools;
-  try { tools = pi.getAllTools(); } catch { return undefined; }
-  if (!Array.isArray(tools)) return undefined;
-  const hasSpawner = tools.some(tool => /subagent|orchestrator/i.test(tool.name));
-  if (!hasSpawner) return 0;
   if (!pi.events?.on || !pi.events?.emit || !ctx.sessionManager?.getSessionId) return undefined;
   const sessionId = ctx.sessionManager.getSessionId();
   if (!sessionId) return undefined;
@@ -20,6 +14,7 @@ export function activeSubagents(pi, ctx) {
     active = data.tasks.every(task => ACTIVE.has(task?.status) || FINISHED.has(task?.status)) ?
       data.tasks.filter(task => ACTIVE.has(task.status)).length : undefined;
   });
+  // Only a fresh task snapshot can establish zero; tool names are not task state.
   // Pi's bus and Gentle's publisher are synchronous; never reuse cached snapshots.
   try { pi.events.emit(REQUEST, { sessionId }); }
   catch { active = undefined; }

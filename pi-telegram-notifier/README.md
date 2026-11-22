@@ -57,7 +57,9 @@ If setup cannot find a recent start, send it again and retry. Pending updates ma
 
 Completion notices query Gentle 4.9's existing display events: `gentle-pi:herdr-desktop:tasks-request` and the synchronous `gentle-pi:herdr-desktop:tasks` response for the current `sessionId`. Queued, running and waiting children all count as active, so no completion notice is sent while any remain. A fresh empty active snapshot permits the notice; snapshots are never cached. No task labels or prompts are forwarded.
 
-With no subagent/orchestrator tools, normal Pi settlement is sufficient. If those tools exist but the publisher is unavailable, malformed or belongs to another session, **completion notices are suppressed** with a local explanation. Other spawners require their own adapter; Pi has no universal detached-child registry. Input-prompt alerts still work. This event integration controls notifications only and never changes agent work or routing.
+Completion always requests the task snapshot, regardless of registered tool names: absence of a tool called `subagent` or `orchestrator` does not establish that delegated work is finished. If the publisher is unavailable, malformed or belongs to another session, **completion notices are suppressed** with a local explanation, including plain Pi without a compatible task publisher. Question/input-prompt alerts remain enabled even while child tasks are active or unconfirmed. Explicit `/telegram-notifier test` and setup confirmations are unaffected.
+
+The Gentle snapshot covers direct child tasks owned by the current parent session only. It does not report tasks retained by a different session after `/new` or `/resume`, or children belonging to another Pi process; this local fix does not expand that publisher contract. Other spawners require their own adapter. This event integration controls notifications only and never changes agent work or routing.
 
 ## Development
 
