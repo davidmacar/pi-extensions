@@ -42,9 +42,9 @@ test("settled notices contain no assistant text; abort, busy and child modes sta
   assert.equal(h.events.has("agent_end"), false);
   await h.fire("agent_settled", { aborted: false, text: "PRIVATE OUTPUT" });
   assert.equal(h.sent.length, 1); assert.doesNotMatch(h.sent[0].text, /PRIVATE OUTPUT/);
-  assert.match(h.sent[0].text, /Nombre de sesión: sesión actual/);
-  assert.match(h.sent[0].text, /Ruta de trabajo: \/repo\/pi/);
-  assert.match(h.sent[0].text, new RegExp(`Tipo de input esperado: ${SETTLED_KIND}`));
+  assert.match(h.sent[0].text, /🧩 Sesión: sesión actual/);
+  assert.match(h.sent[0].text, /📁 Ruta: \/repo\/pi/);
+  assert.match(h.sent[0].text, new RegExp(`📝 Input esperado: ${SETTLED_KIND}`));
   await h.fire("agent_settled", { aborted: true });
   await h.fire("agent_settled", {}, { ...h.ctx, isIdle: () => false });
   await h.fire("agent_settled", {}, { ...h.ctx, mode: "json", hasUI: false });
@@ -54,9 +54,9 @@ test("settled notices contain no assistant text; abort, busy and child modes sta
 test("a prompt and the subsequent completion both notify; open prompts suppress idle duplicates", async () => {
   const h = host(); await h.fire("session_start"); await h.fire("agent_start");
   await h.fire("ui_prompt_start", { kind: "confirm", title: "PRIVATE TITLE" });
-  assert.match(h.sent[0].text, /Nombre de sesión: sesión actual/);
-  assert.match(h.sent[0].text, /Ruta de trabajo: \/repo\/pi/);
-  assert.match(h.sent[0].text, new RegExp(`Tipo de input esperado: ${PROMPT_KIND}`));
+  assert.match(h.sent[0].text, /🧩 Sesión: sesión actual/);
+  assert.match(h.sent[0].text, /📁 Ruta: \/repo\/pi/);
+  assert.match(h.sent[0].text, new RegExp(`📝 Input esperado: ${PROMPT_KIND}`));
   await h.fire("agent_settled", {}); assert.equal(h.sent.length, 1);
   await h.fire("ui_prompt_end"); await h.fire("agent_settled", {});
   assert.equal(h.sent.length, 2); assert.doesNotMatch(h.sent[0].text, /PRIVATE TITLE/);
@@ -66,11 +66,11 @@ test("renames are reflected and a manager without getSessionName cannot break no
   const h = host(); await h.fire("session_start");
   h.ctx.sessionManager.getSessionName = () => "renombrada";
   await h.fire("ui_prompt_start", {});
-  assert.match(h.sent[0].text, /Nombre de sesión: renombrada/);
+  assert.match(h.sent[0].text, /🧩 Sesión: renombrada/);
 
   const noName = host(); noName.ctx.sessionManager = { getSessionId: () => "parent" };
   await noName.fire("session_start"); await noName.fire("agent_settled", {});
-  assert.match(noName.sent[0].text, /Nombre de sesión: sin nombre/);
+  assert.match(noName.sent[0].text, /🧩 Sesión: sin nombre/);
 });
 
 test("send-time identity check prevents delivery to a group or another user", async () => {

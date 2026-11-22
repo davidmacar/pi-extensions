@@ -1,6 +1,29 @@
 # Pi Telegram wait notifications
 
-Sends short Spanish Telegram alerts to the private account **@MacDamon15** when Pi asks for input or finishes a run. Every notice includes Pi's current session name (or `sin nombre`), working directory, and expected input kind: `respuesta a preguntas del agente` for a prompt or `terminación de las acciones del agente` for a settled run. Long names and paths are truncated to stay within Telegram's 4096-character limit; the kind and instruction to respond in Pi remain intact. Responses remain in Pi, as selected during setup. No agent output, question bodies, prompt titles or buttons are sent.
+Sends readable Spanish Telegram alerts with emojis to the private account **@MacDamon15** when Pi asks for input or finishes a run. Each notice includes:
+
+- the current session name (or `sin nombre`);
+- the working directory;
+- the expected input kind;
+- the current state;
+- the response channel (`Pi`); and
+- the action to take next.
+
+Example prompt notice:
+
+```text
+❓ Pi necesita tu respuesta
+
+🔄 Estado: Esperando una respuesta a preguntas del agente
+🧩 Sesión: mi sesión
+📁 Ruta: /home/me/proyecto
+📝 Input esperado: respuesta a preguntas del agente
+📡 Canal: Pi
+👉 Acción: Abre Pi y responde allí a las preguntas.
+Responde en Pi para continuar.
+```
+
+A completion notice uses `✅ El agente ha terminado`, reports `terminación de las acciones del agente`, and asks for the next instruction. Long names and paths are truncated to stay within Telegram's 4096-character limit; the state, kind, channel, action and instruction remain intact. Responses remain in Pi, as selected during setup. No agent output, question bodies, prompt titles or buttons are sent.
 
 ## Activate
 
