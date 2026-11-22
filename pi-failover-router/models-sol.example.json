@@ -25,7 +25,13 @@
             "image"
           ],
           "contextWindow": 1050000,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.0275,
+            "output": 0.1375,
+            "cacheRead": 0.0,
+            "cacheWrite": 0.0
+          }
         }
       ]
     },
@@ -53,7 +59,13 @@
             "image"
           ],
           "contextWindow": 1050000,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.029412,
+            "output": 0.147059,
+            "cacheRead": 0.001471,
+            "cacheWrite": 0.029412
+          }
         }
       ]
     },
@@ -81,7 +93,13 @@
             "image"
           ],
           "contextWindow": 1050000,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.029412,
+            "output": 0.147059,
+            "cacheRead": 0.001471,
+            "cacheWrite": 0.036765
+          }
         }
       ]
     },
@@ -109,7 +127,13 @@
             "image"
           ],
           "contextWindow": 1050000,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.042794,
+            "output": 0.213971,
+            "cacheRead": 0.00214,
+            "cacheWrite": 0.053493
+          }
         }
       ]
     },
@@ -137,7 +161,13 @@
             "image"
           ],
           "contextWindow": 1050000,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.05,
+            "output": 0.25,
+            "cacheRead": 0.0025,
+            "cacheWrite": 0.0625
+          }
         }
       ]
     },
@@ -165,7 +195,13 @@
             "image"
           ],
           "contextWindow": 1050000,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.055882,
+            "output": 0.279412,
+            "cacheRead": 0.002794,
+            "cacheWrite": 0.069853
+          }
         }
       ]
     }

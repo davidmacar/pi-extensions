@@ -1,14 +1,13 @@
 # Configure GPT 6.2 Sol channels
 
 The router's `sol-barato` and `sol-rapido` routes use `gpt-6.2-sol` on six SubRouter connections. The
-provider entries now exist in `~/.pi/agent/models.json`; **three of them still carry placeholder keys**.
+provider entries and their prices exist in `~/.pi/agent/models.json` and the rotated keys are in place.
 
 ## Finish the local setup
 
 1. Open `~/.pi/agent/models.json` locally. Keep this credential-bearing file private; do not paste it
    into chat.
-2. Replace the placeholder `apiKey` of the three channels marked *pending* in the table below.
-   `fxpayback`, `XCGX AI` and `LingAI` already hold their rotated keys and were left untouched.
+2. All six rotated keys are stored. The templates keep `REPLACE_WITH_...` markers only as documentation.
 3. Keep DeepSeek's entitlement on `subrouter-lingai` working. If the rotated LingAI key no longer
    permits DeepSeek, give DeepSeek a separate connection/key and point its route there locally.
 4. Review the router file `~/.pi/agent/failover-router.json`: both Sol chains must list the same six
@@ -25,14 +24,14 @@ A backup of the previous provider file was taken before the edit:
 All paths are inside `~/.pi/agent/models.json`. Provider IDs are local labels: each channel's own key
 selects the SubRouter upstream, the shared URL does not.
 
-| Channel | JSON field | Key state |
+| Channel | JSON field | Key |
 |---|---|---|
-| fxpayback | `providers.subrouter-fxpayback.apiKey` | rotated key already present |
-| XCGX AI | `providers.subrouter-xcgx.apiKey` | rotated key already present |
-| fate86api | `providers.subrouter-fate86api.apiKey` | **placeholder** |
-| a6aa | `providers.subrouter-a6aa.apiKey` | **placeholder** |
-| OpenAI Pro | `providers.subrouter-openai-pro.apiKey` | **placeholder** |
-| LingAI | `providers.subrouter-lingai.apiKey` | rotated key already present |
+| fxpayback | `providers.subrouter-fxpayback.apiKey` | rotated key stored |
+| XCGX AI | `providers.subrouter-xcgx.apiKey` | rotated key stored |
+| fate86api | `providers.subrouter-fate86api.apiKey` | rotated key stored |
+| a6aa | `providers.subrouter-a6aa.apiKey` | rotated key stored |
+| OpenAI Pro | `providers.subrouter-openai-pro.apiKey` | rotated key stored |
+| LingAI | `providers.subrouter-lingai.apiKey` | rotated key stored |
 
 [`models-sol.example.json`](../models-sol.example.json) documents the same shape without secrets.
 
@@ -47,9 +46,10 @@ selects the SubRouter upstream, the shared URL does not.
   the new model, so its first measurement uses the new references.
 - Context/output limits and thinking-level labels carry forward the previous Sol configuration. They
   are assumptions pending provider validation.
-- The maintained per-channel prices are still the old model's rates, so cost estimates are
-  approximate until real `gpt-6.2-sol` prices replace them. The three new providers have no `cost`
-  block yet.
+- Every channel carries its own current marketplace rate, fetched 2026-11-22 and converted from CNY
+  at the platform's internal 6.8 rate. The generic `subrouter` entry uses the six-channel average.
+  Prices move: rerun the fetch when they change. Cost never affects routing, which uses the step
+  order only.
 - Historical troubleshooting examples were version-normalized; they do not prove a live request
   succeeded. No transcripts, logs or measurement caches were erased.
 

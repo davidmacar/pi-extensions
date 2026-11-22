@@ -4,7 +4,7 @@
       "provider": "router",
       "id": "sol-barato",
       "name": "GPT 6.2 Sol — barato",
-      "description": "Canales de gpt-6.2-sol; orden configurado, precios pendientes de verificar.",
+      "description": "Canales de gpt-6.2-sol del mas barato al mas caro. Input 0.039167, output 0.195833, cacheread 0.001729, cachewrite 0.042004 usd por millon de tokens (media de los 6 canales, SubRouter 2026-11-22, tasa 6.8).",
       "order": "cost",
       "thinkingLevels": [
         "low",
@@ -75,7 +75,7 @@
       "provider": "router",
       "id": "sol-rapido",
       "name": "GPT 6.2 Sol — rápido",
-      "description": "Los mismos canales de gpt-6.2-sol, ordenados por velocidad medida.",
+      "description": "Los mismos canales de gpt-6.2-sol, ordenados por tokens por segundo medidos. La medicion se hace al iniciar cada sesion y se refresca cada 15 minutos mientras la sesion siga activa.",
       "order": "speed",
       "thinkingLevels": [
         "low",
