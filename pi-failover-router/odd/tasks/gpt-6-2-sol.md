@@ -1,5 +1,5 @@
 # GPT 6.2 Sol configuration replacement
-Branch: `feat/gpt-6-2-sol`; delivery: local only. Checks: offline `node --test`; no provider requests.
+Branch: `feat/gpt-6-2-sol`; delivery: stacked-to-main, PR #2 on base PR #1. Checks: offline `node --test`; no provider requests.
 Scope: router configuration, repository references, secret-free provider template. Never read credential files.
 
 ## Specs
@@ -34,4 +34,5 @@ L15: fxpayback retested after cooldown: rc=0, OK. The single incomplete_stream w
 L16: Verifier returned MET for every spec, no blocker, zero provider requests. Its only remark (two profile files with different `active`) is resolved by aligning the legacy file to router-rapido. Feature complete pending publish decision.
 L17: Provisional verifier closure withdrew S1: `gentle-ai/profile-fallbacks.json` (30 refs), `agent/subagents.json` (2 refs) and the speed cache still held the old id. All updated (backups `*.bak-6.2sol`); both JSON files validate and config files are clean. Live-session memory rewrites the cache, so legacy keys can return until restart. Log timestamp corrected to 19:36:48-19:36:50Z; the log records the dispatch, the client result proves success.
 L18: Final recheck passed. Evidence: registration lines 2578/2580 (both routes, 6 candidates), six bypass/selected entries 2582-2612, rotations 2663-2666 (fxpayback->xcgx) and 2712-2715 (a6aa->openai-pro), cache 2 ok samples per new channel, all stale files 0 old refs. Feature closed.
+L19: Published as a stacked pair at the user's request: PR #1 (Telegram, base master) and PR #2 (Sol, base feat/telegram-wait-notifier, retarget after merge). Both branches pushed. Remaining uncommitted work stays local: classify.js, two test files and docs/failure-classification.md.
 L5: Configured explorer previously failed before launch: Model "router/deepseek-rapido:high" not found. No explorer retry; known configuration/docs evidence reused. Forecast about 350 authored changed lines; local commit only, no publishing.
