@@ -5,7 +5,7 @@ import { buildChannelsSnapshot, isChannelsSnapshot, CHANNELS_SNAPSHOT_SCHEMA, CH
 import { emptyCache, recordFailure, recordSample, tokensPerSecond } from "../lib/speed-cache.js";
 import { orderBySpeed } from "../lib/speed-order.js";
 
-const SOL = "gpt-6.1-sol";
+const SOL = "gpt-6.2-sol";
 const DEEPSEEK = "deepseek-v4.1-flash-1017";
 const ref = (channel, model) => `subrouter-${channel}/${model}`;
 

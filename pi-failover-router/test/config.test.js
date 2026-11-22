@@ -8,9 +8,9 @@ const PLAUSIBLE = {
   name: "Sol (failover)",
   thinkingLevels: ["high", "xhigh"],
   chain: [
-    { model: "subrouter-best/gpt-6.1-sol", thinkingLevel: "xhigh" },
-    { model: "subrouter-000/gpt-6.1-sol", thinkingLevel: "xhigh" },
-    "subrouter-fxpayback/gpt-6.1-sol",
+    { model: "subrouter-best/gpt-6.2-sol", thinkingLevel: "xhigh" },
+    { model: "subrouter-000/gpt-6.2-sol", thinkingLevel: "xhigh" },
+    "subrouter-fxpayback/gpt-6.2-sol",
   ],
 };
 
@@ -19,9 +19,9 @@ test("normalizes a valid virtual model", () => {
   assert.equal(v.provider, "router");
   assert.equal(v.id, "sol");
   assert.deepEqual(v.chain, [
-    { model: "subrouter-best/gpt-6.1-sol", thinkingLevel: "xhigh" },
-    { model: "subrouter-000/gpt-6.1-sol", thinkingLevel: "xhigh" },
-    { model: "subrouter-fxpayback/gpt-6.1-sol" },
+    { model: "subrouter-best/gpt-6.2-sol", thinkingLevel: "xhigh" },
+    { model: "subrouter-000/gpt-6.2-sol", thinkingLevel: "xhigh" },
+    { model: "subrouter-fxpayback/gpt-6.2-sol" },
   ]);
 });
 
@@ -36,7 +36,7 @@ test("rejects an empty chain", () => {
 
 test("rejects a model without provider prefix", () => {
   assert.throws(
-    () => normalizeVirtual({ ...PLAUSIBLE, chain: ["gpt-6.1-sol"] }),
+    () => normalizeVirtual({ ...PLAUSIBLE, chain: ["gpt-6.2-sol"] }),
     /provider\/id/,
   );
 });

@@ -1,0 +1,173 @@
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "subrouter-fxpayback": {
+      "name": "fxpayback",
+      "baseUrl": "https://subrouter.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_FXPAYBACK_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000
+        }
+      ]
+    },
+    "subrouter-xcgx": {
+      "name": "XCGX AI",
+      "baseUrl": "https://subrouter.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_XCGX_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000
+        }
+      ]
+    },
+    "subrouter-fate86api": {
+      "name": "fate86api",
+      "baseUrl": "https://subrouter.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_FATE86API_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000
+        }
+      ]
+    },
+    "subrouter-a6aa": {
+      "name": "a6aa",
+      "baseUrl": "https://subrouter.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_A6AA_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000
+        }
+      ]
+    },
+    "subrouter-openai-pro": {
+      "name": "OpenAI Pro",
+      "baseUrl": "https://subrouter.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_OPENAI_PRO_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000
+        }
+      ]
+    },
+    "subrouter-lingai": {
+      "name": "LingAI",
+      "baseUrl": "https://subrouter.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_LINGAI_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000
+        }
+      ]
+    }
+  }
+}

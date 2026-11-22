@@ -93,12 +93,17 @@ keeps the current recovery pass; that reset hook is reserved for a real new prom
 
 ## Configuration
 
+Active chains live in `~/.pi/agent/failover-router.json` (or the file named by
+`PI_FAILOVER_ROUTER_CONFIG`). Physical providers and their keys live in Pi's private
+`~/.pi/agent/models.json`. Use [the Sol setup guide](docs/sol-setup.md) to merge the
+six-channel [placeholder template](models-sol.example.json) without replacing unrelated models.
+
 Two virtual models per family: a cheap one (`order: "cost"`) and a fast one (`order: "speed"`).
 
 | Virtual | Order | First candidate |
 | --- | --- | --- |
-| `router/sol-barato` — GPT 6.1 Sol — barato | configured order, cheapest channel first | `subrouter-fxpayback` |
-| `router/deepseek-barato` — Deepseek 4.1 Flash — barato | configured order, cheapest channel first | `subrouter-znu` |
+| `router/sol-barato` — GPT 6.2 Sol — barato | configured order, prices pending verification | `subrouter-fxpayback` |
+| `router/deepseek-barato` — Deepseek 4.1 Flash — barato | configured order, prices pending verification | `subrouter-znu` |
 | `router/sol-rapido` | measured throughput, fastest first | whatever probed fastest |
 | `router/deepseek-rapido` | measured throughput, fastest first | whatever probed fastest |
 

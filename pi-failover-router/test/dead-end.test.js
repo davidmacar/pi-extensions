@@ -6,7 +6,7 @@ import { lastAssistantMessage, resolveDeadEnd } from "../lib/dead-end.js";
 const STREAM_FAILURE = {
   role: "assistant",
   provider: "subrouter-fxpayback",
-  model: "gpt-6.1-sol",
+  model: "gpt-6.2-sol",
   stopReason: "error",
   errorMessage: "upstream stream read failed before completion: http2: response body closed",
 };
@@ -16,7 +16,7 @@ test("the real stream failure is a rotation the router should take over", () => 
   assert.equal(verdict.rotate, true);
   assert.equal(verdict.kind, "incomplete_stream");
   assert.equal(verdict.provider, "subrouter-fxpayback");
-  assert.equal(verdict.id, "gpt-6.1-sol");
+  assert.equal(verdict.id, "gpt-6.2-sol");
 });
 
 test("a request-shaped failure at the dead end is not rotated", () => {

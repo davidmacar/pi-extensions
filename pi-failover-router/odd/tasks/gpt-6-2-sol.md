@@ -1,0 +1,26 @@
+# GPT 6.2 Sol configuration replacement
+Branch: `feat/gpt-6-2-sol`; delivery: local only. Checks: offline `node --test`; no provider requests.
+Scope: router configuration, repository references, secret-free provider template. Never read credential files.
+
+## Specs
+S1: "Quiero que no utiices esos tokens pero cambies todas las configuraciones que hacen referencia a los modelos antiguos de gpt-6.1-sol y las cambies a gpt-6.2-sol, en las claves de los proveedores/canales, para no usar los tokens, pon solamente placeholders y luego indicame donde debo poner las claves que ya he rotado para que funcione todo correctamente. Cuando tenga todo configurado y puesto con credenciales te pedire que hagas pruebas"
+S2: "Si, el Id del modelo es gpt-6.2-sol en todos los canales."
+S3: "quiero que se mantenga el sol-rápido y el sol-barato pero con estee nuevo modelo que lo sustituye, vamos, todo igual pero cambiando el modelo por el nuevo y los canales que lo proveeen."
+Channel labels supplied by the user (credentials excluded): fxpayback, XCGX AI, fate86api, a6aa, OpenAI Pro, LingAI.
+
+## Tasks
+T1 | S1-S3 | parent inline | done | Replace repository references and active router chains; preserve unrelated edits and DeepSeek. Commit: pending.
+T2 | S1-S3 | parent inline | done | Create six-provider placeholder template and setup instructions. Commit: pending.
+T3 | S1-S3 | parent checks + independent verify (Risk: item 5, active runtime configuration) | blocked | Offline checks pass (220/220); independent verifier unavailable, zero proof, no retry. Live checks deferred by user. Commit: pending.
+T4 | S1-S3 | human | blocked | Wait for user to sanitize/merge `~/.pi/agent/models.json`, remove old model entries and populate rotated keys locally; agent must not read credential-bearing files. Commit: n/a.
+
+## Log
+L1: "Quiero que no utiices esos tokens pero cambies todas las configuraciones que hacen referencia a los modelos antiguos de gpt-6.1-sol y las cambies a gpt-6.2-sol, en las claves de los proveedores/canales, para no usar los tokens, pon solamente placeholders y luego indicame donde debo poner las claves que ya he rotado para que funcione todo correctamente. Cuando tenga todo configurado y puesto con credenciales te pedire que hagas pruebas"
+L2: User selected `repo-and-active` for active router and models configuration. Safety boundary prevents opening or transforming credential-bearing `models.json`; use a separate secret-free template instead. ai-model-tester credential config/storage also remain untouched.
+L3: Existing unrelated changes: README.md, lib/classify.js, test/classify.test.js, test/router.test.js and untracked docs/failure-classification.md. Preserve them; do not stage their pre-existing hunks.
+L4: Active router JSON has `{Hay` immediately before `sol-rapido`; bounded syntax correction required. No configuration override env var found. Preserve DeepSeek definitions verbatim as parsed after removing this typo. Old four-channel pricing cannot describe six new channels, so remove the stale Sol average. Cost order uses user's listed order, not verified prices; speed sorting remains unchanged. Physical limits are retained assumptions, not validated new-model capabilities.
+L6: T1 observed RED: 3 tests, 1 pass, 2 failures (old example name and missing provider template). After T1, both route/DeepSeek example tests pass. Active router repaired and replaced; original non-secret snapshot in `/tmp/gpAJNCAw/sol-config-50b_1ubq/active-before.json`. No credential file accessed.
+L7: T2: created repository template, staged identical `~/.pi/agent/models-sol.placeholders.json`, and setup guide. Structural active-router check passes: four virtuals, six channels per Sol route, DeepSeek deep equality, identical template copies. Full offline suite launched as job-1. Transport/limits unverified, explicit in setup guide.
+L8: Full offline suite initially failed (217/220 pass): five escaped regex expectations had not been version-updated, including two negative assertions. One correction batch updated all five; focused+full checks running as job-2. Independent verifier mws7dxj3-3-rjvx unavailable before evidence; no retry. Required independent proof remains unavailable; T3 cannot be claimed complete.
+L9: job-2 exit 0: focused Sol/router checks pass and full suite 220/220 pass, no skipped/cancelled tests. Structural check and git diff --check pass. No runtime source edited by this feature, so no unrequested-command differential check applies. S1 overall partial: active providers and external tester configs remain untouched; S2-S3 verified only for active router and secret-free examples. Independent verification unavailable; feature not fully verified.
+L5: Configured explorer previously failed before launch: Model "router/deepseek-rapido:high" not found. No explorer retry; known configuration/docs evidence reused. Forecast about 350 authored changed lines; local commit only, no publishing.

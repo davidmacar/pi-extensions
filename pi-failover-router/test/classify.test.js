@@ -7,7 +7,7 @@ import { classifyFailure, nextCandidate, cooldownMs } from "../lib/classify.js";
 test("channel that rejects tool calls rotates", () => {
   const body =
     'status_code=400, bad response status code 400, body: {"error":{"message":' +
-    '"gpt-6.1-sol requires Responses for tool calls; this account only supports Chat Completions",' +
+    '"gpt-6.2-sol requires Responses for tool calls; this account only supports Chat Completions",' +
     '"type":"invalid_request_error"}}';
   const r = classifyFailure(body);
   assert.equal(r.rotate, true);
@@ -174,36 +174,36 @@ for (const text of [
 // --- Candidate selection ---------------------------------------------------
 
 const CHAIN = [
-  { model: "best/gpt-6.1-sol", thinkingLevel: "xhigh" },
-  { model: "000/gpt-6.1-sol", thinkingLevel: "xhigh" },
-  { model: "fxpayback/gpt-6.1-sol" },
+  { model: "best/gpt-6.2-sol", thinkingLevel: "xhigh" },
+  { model: "000/gpt-6.2-sol", thinkingLevel: "xhigh" },
+  { model: "fxpayback/gpt-6.2-sol" },
 ];
 
 test("picks the first candidate that is not the failed model and not cooling", () => {
   const next = nextCandidate({
     chain: CHAIN,
-    failedModel: "best/gpt-6.1-sol",
+    failedModel: "best/gpt-6.2-sol",
     cooldowns: new Map(),
     now: 1000,
   });
-  assert.equal(next.model, "000/gpt-6.1-sol");
+  assert.equal(next.model, "000/gpt-6.2-sol");
   assert.equal(next.thinkingLevel, "xhigh");
 });
 
 test("skips models inside their cooldown", () => {
   const next = nextCandidate({
     chain: CHAIN,
-    failedModel: "best/gpt-6.1-sol",
-    cooldowns: new Map([["000/gpt-6.1-sol", 5000]]),
+    failedModel: "best/gpt-6.2-sol",
+    cooldowns: new Map([["000/gpt-6.2-sol", 5000]]),
     now: 1000,
   });
-  assert.equal(next.model, "fxpayback/gpt-6.1-sol");
+  assert.equal(next.model, "fxpayback/gpt-6.2-sol");
 });
 
 test("returns undefined when every candidate is exhausted or failed", () => {
   const next = nextCandidate({
-    chain: [{ model: "best/gpt-6.1-sol" }],
-    failedModel: "best/gpt-6.1-sol",
+    chain: [{ model: "best/gpt-6.2-sol" }],
+    failedModel: "best/gpt-6.2-sol",
     cooldowns: new Map(),
     now: 1000,
   });
