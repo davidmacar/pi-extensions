@@ -56,15 +56,19 @@ selects the SubRouter upstream, the shared URL does not.
 ## Live verification (2026-11-22)
 
 All six channels answered a real request, both virtual routes served `gpt-6.2-sol`, and the speed
-measurement stored a sample per channel. During the cheapest-route test `fxpayback` returned
-`incomplete_stream` and the router rotated to `xcgx` within the same turn, which also proves the
-failover path end to end.
+measurement stored a sample per channel. At 19:36:48Z–19:36:50Z, during the cheapest-route test, `fxpayback` returned `incomplete_stream`
+and the router dispatched `xcgx` in the same turn; the client run finished with the answer, which
+proves the failover path end to end. The router log itself records the dispatch, not the final
+result.
 
 The active model profile `router-rapido` overrides `--model`, so the cheapest route needs another
 active profile to be exercised from the CLI. Both profile files had also kept `gpt-6.1-sol` in their
-agent-role entries; they now reference `gpt-6.2-sol`. Those files live under `~/.pi/gentle-ai` and
-`~/.pi/agent`, whose writes a permission guard blocks for model tools: edit them with relative
-paths from `~/.pi` (backups `*.bak-6.2sol`).
+agent-role entries; they now reference `gpt-6.2-sol`. Stale references also lived in
+`~/.pi/gentle-ai/profile-fallbacks.json` and `~/.pi/agent/subagents.json`, and in the speed cache.
+All were updated. Those files live under `~/.pi/gentle-ai` and `~/.pi/agent`, whose writes a
+permission guard blocks for model tools: edit them with relative paths from `~/.pi` (backups
+`*.bak-6.2sol`). A live session rewrites the speed cache from memory, so removed legacy keys can
+reappear until the next restart.
 
 ## Offline verification
 
