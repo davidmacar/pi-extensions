@@ -776,6 +776,44 @@ test("a channel-owned error Pi would abandon is made retryable", () => {
   assert.match(replacement.errorMessage, /upstream_stream_read_error/);
 });
 
+test("the provider's unclassified error is made retryable and taken over", () => {
+  const message = {
+    ...http2Failure,
+    errorMessage: "当前请求未成功。 原因：请求处理过程中出现未归类错误。 解决方案：请稍后重试；如果问题持续，请带 request_id 联系客服排查。 request_id: 202611211239031829861288268d9d6npAmIEqM",
+  };
+  const { fire, logs } = boot();
+  const [replacement] = fire("message_end", { message });
+  assert.ok(replacement, "expected the error to be annotated for Pi's retry");
+  assert.ok(replacement.errorMessage.startsWith(message.errorMessage));
+  assert.match(replacement.errorMessage, /upstream_stream_read_error/);
+
+  fire("agent_end", { messages: [message] }, { model: { provider: "router", id: "sol" } });
+  const recorded = logs.find(l => l.includes("failure recorded") && l.includes("upstream_unclassified"));
+  assert.ok(recorded, `expected classification to be recorded, got: ${logs.join(" | ")}`);
+  const takeover = logs.find(l => l.includes("taking over"));
+  assert.ok(takeover, `expected terminal takeover, got: ${logs.join(" | ")}`);
+  assert.doesNotMatch(takeover, /next subrouter-fxpayback\/gpt-6\.2-sol/);
+});
+
+test("the upstream do-request failure is made retryable and taken over", () => {
+  const message = {
+    ...http2Failure,
+    errorMessage: "Error: upstream error: do request failed (request id: 20261121143209442001439RP9kQHsq)",
+  };
+  const { fire, logs } = boot();
+  const [replacement] = fire("message_end", { message });
+  assert.ok(replacement, "expected the error to be annotated for Pi's retry");
+  assert.ok(replacement.errorMessage.startsWith(message.errorMessage));
+  assert.match(replacement.errorMessage, /upstream_stream_read_error/);
+
+  fire("agent_end", { messages: [message] }, { model: { provider: "router", id: "sol" } });
+  const recorded = logs.find(l => l.includes("failure recorded") && l.includes("upstream_request_failed"));
+  assert.ok(recorded, `expected classification to be recorded, got: ${logs.join(" | ")}`);
+  const takeover = logs.find(l => l.includes("taking over"));
+  assert.ok(takeover, `expected terminal takeover, got: ${logs.join(" | ")}`);
+  assert.doesNotMatch(takeover, /next subrouter-fxpayback\/gpt-6\.2-sol/);
+});
+
 test("a request-shaped error is never made retryable", () => {
   const { fire } = boot();
   const [replacement] = fire("message_end", {

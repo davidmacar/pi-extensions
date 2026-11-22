@@ -74,6 +74,18 @@ const RULES = [
     kind: "provider_unavailable",
     pattern: /overloaded|unavailable|server.?error|internal.?error|server_busy|capacity|high demand|50[023]/i,
   },
+  {
+    // A reported gateway envelope for an unclassified upstream-processing
+    // failure. Require both phrases; generic retry advice alone is not enough.
+    kind: "upstream_unclassified",
+    pattern: /当前请求未成功[\s\S]{0,200}未归类错误|未归类错误[\s\S]{0,200}当前请求未成功/,
+  },
+  {
+    // The upstream gateway could not execute the request. Keep this specific:
+    // neither phrase alone establishes that another channel can fix it.
+    kind: "upstream_request_failed",
+    pattern: /upstream error:\s*do request failed\b/i,
+  },
 ];
 
 /**
@@ -100,6 +112,8 @@ const ROTATABLE = new Set([
   "auth",
   "timeout",
   "provider_unavailable",
+  "upstream_unclassified",
+  "upstream_request_failed",
 ]);
 
 /**
