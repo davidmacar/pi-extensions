@@ -47,7 +47,7 @@ test("each replacement channel has its own placeholder and physical model", () =
   for (const channel of channels) {
     const provider = providers[`subrouter-${channel}`];
     assert.equal(provider.apiKey, `REPLACE_WITH_SUBROUTER_${channel.replaceAll("-", "_").toUpperCase()}_KEY`);
-    assert.equal(provider.baseUrl, "https://subrouter.ai/v1");
+    assert.equal(provider.baseUrl, "https://euwest.up.railway.app/v1");
     assert.equal(provider.api, "openai-completions");
     assert.equal(provider.models.length, 1);
     assert.equal(provider.models[0].id, "gpt-6.2-sol");

@@ -3,7 +3,7 @@
   "providers": {
     "subrouter-fxpayback": {
       "name": "fxpayback",
-      "baseUrl": "https://subrouter.ai/v1",
+      "baseUrl": "https://euwest.up.railway.app/v1",
       "api": "openai-completions",
       "apiKey": "REPLACE_WITH_SUBROUTER_FXPAYBACK_KEY",
       "models": [
@@ -31,7 +31,7 @@
     },
     "subrouter-xcgx": {
       "name": "XCGX AI",
-      "baseUrl": "https://subrouter.ai/v1",
+      "baseUrl": "https://euwest.up.railway.app/v1",
       "api": "openai-completions",
       "apiKey": "REPLACE_WITH_SUBROUTER_XCGX_KEY",
       "models": [
@@ -59,7 +59,7 @@
     },
     "subrouter-fate86api": {
       "name": "fate86api",
-      "baseUrl": "https://subrouter.ai/v1",
+      "baseUrl": "https://euwest.up.railway.app/v1",
       "api": "openai-completions",
       "apiKey": "REPLACE_WITH_SUBROUTER_FATE86API_KEY",
       "models": [
@@ -87,7 +87,7 @@
     },
     "subrouter-a6aa": {
       "name": "a6aa",
-      "baseUrl": "https://subrouter.ai/v1",
+      "baseUrl": "https://euwest.up.railway.app/v1",
       "api": "openai-completions",
       "apiKey": "REPLACE_WITH_SUBROUTER_A6AA_KEY",
       "models": [
@@ -115,7 +115,7 @@
     },
     "subrouter-openai-pro": {
       "name": "OpenAI Pro",
-      "baseUrl": "https://subrouter.ai/v1",
+      "baseUrl": "https://euwest.up.railway.app/v1",
       "api": "openai-completions",
       "apiKey": "REPLACE_WITH_SUBROUTER_OPENAI_PRO_KEY",
       "models": [
@@ -143,7 +143,7 @@
     },
     "subrouter-lingai": {
       "name": "LingAI",
-      "baseUrl": "https://subrouter.ai/v1",
+      "baseUrl": "https://euwest.up.railway.app/v1",
       "api": "openai-completions",
       "apiKey": "REPLACE_WITH_SUBROUTER_LINGAI_KEY",
       "models": [
