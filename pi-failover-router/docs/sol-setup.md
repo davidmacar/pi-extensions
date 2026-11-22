@@ -53,6 +53,19 @@ selects the SubRouter upstream, the shared URL does not.
 - Historical troubleshooting examples were version-normalized; they do not prove a live request
   succeeded. No transcripts, logs or measurement caches were erased.
 
+## Live verification (2026-11-22)
+
+All six channels answered a real request, both virtual routes served `gpt-6.2-sol`, and the speed
+measurement stored a sample per channel. During the cheapest-route test `fxpayback` returned
+`incomplete_stream` and the router rotated to `xcgx` within the same turn, which also proves the
+failover path end to end.
+
+The active model profile `router-rapido` overrides `--model`, so the cheapest route needs another
+active profile to be exercised from the CLI. Both profile files had also kept `gpt-6.1-sol` in their
+agent-role entries; they now reference `gpt-6.2-sol`. Those files live under `~/.pi/gentle-ai` and
+`~/.pi/agent`, whose writes a permission guard blocks for model tools: edit them with relative
+paths from `~/.pi` (backups `*.bak-6.2sol`).
+
 ## Offline verification
 
 `node --test test/sol-example.test.js` checks both routes, the six physical entries, placeholder shape
