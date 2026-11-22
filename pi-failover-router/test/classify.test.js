@@ -21,10 +21,68 @@ test("mid-stream 499 with a closed http2 body rotates", () => {
   assert.equal(r.kind, "incomplete_stream");
 });
 
+test("the provider's unclassified-request envelope rotates without depending on request_id", () => {
+  const body = "Error: 当前请求未成功。 原因：请求处理过程中出现未归类错误。 解决方案：请稍后重试；如果问题持续，请带 request_id 联系客服排查。 request_id: 202611211239031829861288268d9d6npAmIEqM";
+  const r = classifyFailure(body);
+  assert.equal(r.rotate, true);
+  assert.equal(r.kind, "upstream_unclassified");
+  assert.equal(r.annotate, true);
+  assert.equal(cooldownMs(r.kind), 2 * 60_000);
+});
+
+test("unclassified envelope does not override a request-shaped error", () => {
+  const r = classifyFailure("当前请求未成功。 原因：请求处理过程中出现未归类错误；context_length_exceeded");
+  assert.equal(r.rotate, false);
+  assert.equal(r.kind, "request_invalid");
+});
+
+test("generic Chinese retry wording without the unclassified envelope stays unknown", () => {
+  for (const body of [
+    "请稍后重试",
+    "请求处理过程中出现错误",
+    "当前请求未成功。解决方案：请稍后重试",
+  ]) {
+    const r = classifyFailure(body);
+    assert.equal(r.rotate, false, body);
+    assert.equal(r.kind, "unknown", body);
+  }
+});
+
 test("incomplete_stream marker alone rotates", () => {
   const r = classifyFailure('{"error_code":"incomplete_stream","status_code":499}');
   assert.equal(r.rotate, true);
   assert.equal(r.kind, "incomplete_stream");
+});
+
+test("the upstream do-request failure rotates without depending on request_id", () => {
+  const body = "Error: upstream error: do request failed (request id: 20261121143209442001439RP9kQHsq)";
+  const r = classifyFailure(body);
+  assert.equal(r.rotate, true);
+  assert.equal(r.kind, "upstream_request_failed");
+  assert.equal(r.annotate, true);
+  assert.equal(cooldownMs(r.kind), 2 * 60_000);
+  assert.equal(
+    classifyFailure("upstream error: do request failed (request id: another-id)").kind,
+    "upstream_request_failed",
+  );
+});
+
+test("the upstream do-request rule stays narrow", () => {
+  for (const body of [
+    "do request failed",
+    "upstream error: connection refused",
+    "Error: upstream error: request failed",
+  ]) {
+    const r = classifyFailure(body);
+    assert.equal(r.rotate, false, body);
+    assert.equal(r.kind, "unknown", body);
+  }
+});
+
+test("the upstream do-request envelope does not override a request-shaped error", () => {
+  const r = classifyFailure("upstream error: do request failed; context_length_exceeded");
+  assert.equal(r.rotate, false);
+  assert.equal(r.kind, "request_invalid");
 });
 
 // --- Provider moderation is channel-owned, but deterministic per channel ----
