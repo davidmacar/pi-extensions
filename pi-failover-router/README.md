@@ -12,16 +12,20 @@ fallback chain:
 quota · auth · rate_limit · provider_unavailable · timeout · network
 ```
 
-Everything else stops the run where it is. Three real channel defects land in the dead zone:
+Everything else stops the run where it is. These real provider/channel responses land in the dead zone or require special handling:
 
 | Observed error | Pi category | Chain moves? |
 | --- | --- | --- |
 | `<model> requires Responses for tool calls; this account only supports Chat Completions` (400, `invalid_request_error`) | `invalid_request` | **no** |
 | `status_code=499, upstream stream read failed before completion: http2: response body closed` | generic `unavailable` (no keyword matches) | **no** |
 | `Invalid prompt: your prompt was flagged as potentially violating our usage policy.` (400, `invalid_request_error`) | `invalid_request` | **no** |
+| `当前请求未成功。原因：请求处理过程中出现未归类错误。…` (gateway error envelope) | `upstream_unclassified` | **yes** |
+| `upstream error: do request failed (request id: …)` (gateway error envelope) | `upstream_request_failed` | **yes** |
 
-Both are **channel** problems: the same model on another channel works. The classifier
-cannot tell, because it only reads the label. This extension reads the raw message instead.
+The first three are **channel** problems: the same model on another channel can work. The
+classifier cannot tell, because it only reads the label. The unclassified gateway envelope is
+handled as a transient upstream failure, while request-shaped failures still take precedence.
+This extension reads the raw message instead.
 
 ## What it does
 
@@ -31,6 +35,7 @@ cannot tell, because it only reads the label. This extension reads the raw messa
 - **rotates** to the next candidate when the failure is channel-owned or transient;
 - **refuses to rotate** when the failure is request-shaped (context length, malformed
   payload, missing field, unknown), because every model would fail the same way;
+- **recognizes the reported gateway envelopes.** The Chinese pair `当前请求未成功` + `未归类错误` is classified as `upstream_unclassified`; the English pair `upstream error` + `do request failed` is classified as `upstream_request_failed`. Their varying request IDs are ignored. Generic fragments alone remain `unknown`, and request-shaped failures still take precedence. Both kinds are annotated for Pi's retry and handled by the same bounded terminal takeover as other rotatable channel errors. See [failure classification](docs/failure-classification.md) for the rules and limits;
 - **takes over failures Pi refuses to retry.** Pi has its own provider-error retry policy, but
   channel rotation is planned once in this extension and shared by native retries and the
   final-settle takeover. For a terminal error, `agent_end` records the next eligible channel;
@@ -93,11 +98,16 @@ keeps the current recovery pass; that reset hook is reserved for a real new prom
 
 ## Configuration
 
+Active chains live in `~/.pi/agent/failover-router.json` (or the file named by
+`PI_FAILOVER_ROUTER_CONFIG`). Physical providers and their keys live in Pi's private
+`~/.pi/agent/models.json`. Use [the Sol setup guide](docs/sol-setup.md) to merge the
+six-channel [placeholder template](models-sol.example.json) without replacing unrelated models.
+
 Two virtual models per family: a cheap one (`order: "cost"`) and a fast one (`order: "speed"`).
 
 | Virtual | Order | First candidate |
 | --- | --- | --- |
-| `router/sol-barato` — GPT 6.1 Sol — barato | configured order, cheapest channel first | `subrouter-fxpayback` |
+| `router/sol-barato` — GPT 6.2 Sol — barato | configured order, cheapest channel first | `subrouter-fxpayback` |
 | `router/deepseek-barato` — Deepseek 4.1 Flash — barato | configured order, cheapest channel first | `subrouter-znu` |
 | `router/sol-rapido` | measured throughput, fastest first | whatever probed fastest |
 | `router/deepseek-rapido` | measured throughput, fastest first | whatever probed fastest |
@@ -226,4 +236,4 @@ Run those directly with `node --test test/recovery.test.js`. `node --test`, no d
   actions, but cannot guarantee what new tool calls the model will choose.
 - A request-shaped failure is never retried elsewhere, by design. If a real channel defect
   ever produces a request-shaped label not covered in `lib/classify.js`, add the marker
-  there **with a test** rather than loosening the generic patterns.
+  there **with a test** rather than loosening the generic patterns. The reported Chinese gateway envelope is a specific exception documented in [failure classification](docs/failure-classification.md).

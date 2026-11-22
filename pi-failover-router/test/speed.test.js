@@ -259,7 +259,7 @@ test("a probe that comes back as a channel error reports the provider text", asy
     role: "assistant",
     stopReason: "error",
     errorMessage:
-      'status_code=400, body: {"error":{"message":"gpt-6.1-sol requires Responses for tool calls; this account only supports Chat Completions","type":"invalid_request_error"}}',
+      'status_code=400, body: {"error":{"message":"gpt-6.2-sol requires Responses for tool calls; this account only supports Chat Completions","type":"invalid_request_error"}}',
     usage: { output: 0 },
   });
   await assert.rejects(
@@ -311,10 +311,10 @@ test("the probe asks for a level the channel accepts, never off", async () => {
     return { usage: { output: 100 } };
   };
   const { measured } = await probeChannels({
-    refs: ["subrouter-best/gpt-6.1-sol"],
+    refs: ["subrouter-best/gpt-6.2-sol"],
     find: () => ({
       provider: "subrouter-best",
-      id: "gpt-6.1-sol",
+      id: "gpt-6.2-sol",
       reasoning: true,
       thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
     }),
@@ -336,7 +336,7 @@ test("a channel that answers with an error is not retried on a wider tier", asyn
     attempts += 1;
     return {
       stopReason: "error",
-      errorMessage: '400: {"message":"gpt-6.1-sol does not support reasoning effort \\"none\\""}',
+      errorMessage: '400: {"message":"gpt-6.2-sol does not support reasoning effort \\"none\\""}',
       usage: { output: 0 },
     };
   };

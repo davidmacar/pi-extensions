@@ -40,9 +40,9 @@ function harness({ config, catalog }) {
 }
 
 const catalog = [
-  { provider: "subrouter-best", id: "gpt-6.1-sol" },
-  { provider: "subrouter-000", id: "gpt-6.1-sol" },
-  { provider: "subrouter-fxpayback", id: "gpt-6.1-sol" },
+  { provider: "subrouter-best", id: "gpt-6.2-sol" },
+  { provider: "subrouter-000", id: "gpt-6.2-sol" },
+  { provider: "subrouter-fxpayback", id: "gpt-6.2-sol" },
 ];
 
 const config = {
@@ -53,9 +53,9 @@ const config = {
       name: "Sol failover",
       thinkingLevels: ["high", "xhigh"],
       chain: [
-        { model: "subrouter-best/gpt-6.1-sol", thinkingLevel: "xhigh" },
-        { model: "subrouter-000/gpt-6.1-sol", thinkingLevel: "xhigh" },
-        { model: "subrouter-fxpayback/gpt-6.1-sol", thinkingLevel: "xhigh" },
+        { model: "subrouter-best/gpt-6.2-sol", thinkingLevel: "xhigh" },
+        { model: "subrouter-000/gpt-6.2-sol", thinkingLevel: "xhigh" },
+        { model: "subrouter-fxpayback/gpt-6.2-sol", thinkingLevel: "xhigh" },
       ],
     },
   ],
@@ -98,12 +98,12 @@ test("a channel-capability retry rotates to the next candidate", () => {
       reason: "retry",
       messages: [],
       failed: {
-        model: { provider: "subrouter-best", id: "gpt-6.1-sol" },
+        model: { provider: "subrouter-best", id: "gpt-6.2-sol" },
         thinkingLevel: "xhigh",
         message: {
           stopReason: "error",
           errorMessage:
-            'status_code=400, bad response status code 400, body: {"error":{"message":"gpt-6.1-sol requires Responses for tool calls; this account only supports Chat Completions","type":"invalid_request_error"}}',
+            'status_code=400, bad response status code 400, body: {"error":{"message":"gpt-6.2-sol requires Responses for tool calls; this account only supports Chat Completions","type":"invalid_request_error"}}',
         },
       },
     },
@@ -119,7 +119,7 @@ test("an incomplete-stream retry rotates", () => {
       reason: "retry",
       messages: [],
       failed: {
-        model: { provider: "subrouter-best", id: "gpt-6.1-sol" },
+        model: { provider: "subrouter-best", id: "gpt-6.2-sol" },
         thinkingLevel: "xhigh",
         message: {
           stopReason: "error",
@@ -139,7 +139,7 @@ test("a request-shaped retry does NOT rotate and keeps the failed model", () => 
       reason: "retry",
       messages: [],
       failed: {
-        model: { provider: "subrouter-best", id: "gpt-6.1-sol" },
+        model: { provider: "subrouter-best", id: "gpt-6.2-sol" },
         thinkingLevel: "high",
         message: { stopReason: "error", errorMessage: "400 context_length_exceeded: maximum context length is 1050000" },
       },
@@ -156,7 +156,7 @@ test("an unknown error does NOT rotate", () => {
       reason: "retry",
       messages: [],
       failed: {
-        model: { provider: "subrouter-best", id: "gpt-6.1-sol" },
+        model: { provider: "subrouter-best", id: "gpt-6.2-sol" },
         thinkingLevel: "high",
         message: { stopReason: "error", errorMessage: "weird sandbox thing" },
       },
@@ -172,7 +172,7 @@ test("continuation sticks to the model of the previous response", () => {
     {
       reason: "continuation",
       messages: [],
-      previous: { model: { provider: "subrouter-000", id: "gpt-6.1-sol" }, thinkingLevel: "high" },
+      previous: { model: { provider: "subrouter-000", id: "gpt-6.2-sol" }, thinkingLevel: "high" },
     },
     ctx,
   );
@@ -187,7 +187,7 @@ test("the failing model enters cooldown and a complete repeat waits for it", asy
     reason: "retry",
     messages: [],
     failed: {
-      model: { provider, id: "gpt-6.1-sol" },
+      model: { provider, id: "gpt-6.2-sol" },
       thinkingLevel: "xhigh",
       message: { stopReason: "error", errorMessage: "503 service unavailable" },
     },
@@ -210,7 +210,7 @@ test("a chain step without a level keeps the level the caller selected", () => {
         id: "sol",
         name: "Sol failover",
         thinkingLevels: ["high", "xhigh"],
-        chain: [{ model: "subrouter-best/gpt-6.1-sol" }, { model: "subrouter-000/gpt-6.1-sol" }],
+        chain: [{ model: "subrouter-best/gpt-6.2-sol" }, { model: "subrouter-000/gpt-6.2-sol" }],
       },
     ],
   };
@@ -226,7 +226,7 @@ test("a chain step without a level keeps the level the caller selected", () => {
       thinkingLevel: "xhigh",
       messages: [],
       failed: {
-        model: { provider: "subrouter-best", id: "gpt-6.1-sol" },
+        model: { provider: "subrouter-best", id: "gpt-6.2-sol" },
         thinkingLevel: "xhigh",
         message: { stopReason: "error", errorMessage: "503 service unavailable" },
       },
@@ -299,21 +299,21 @@ const speedConfig = {
       name: "Sol rápido",
       order: "speed",
       thinkingLevels: ["high"],
-      chain: [{ model: "subrouter-best/gpt-6.1-sol" }, { model: "subrouter-000/gpt-6.1-sol" }],
+      chain: [{ model: "subrouter-best/gpt-6.2-sol" }, { model: "subrouter-000/gpt-6.2-sol" }],
     },
     {
       provider: "router",
       id: "sol",
       name: "Sol barato",
       thinkingLevels: ["high"],
-      chain: [{ model: "subrouter-best/gpt-6.1-sol" }, { model: "subrouter-000/gpt-6.1-sol" }],
+      chain: [{ model: "subrouter-best/gpt-6.2-sol" }, { model: "subrouter-000/gpt-6.2-sol" }],
     },
   ],
 };
 
 const FAST_CATALOG = [
-  { provider: "subrouter-best", id: "gpt-6.1-sol" },
-  { provider: "subrouter-000", id: "gpt-6.1-sol" },
+  { provider: "subrouter-best", id: "gpt-6.2-sol" },
+  { provider: "subrouter-000", id: "gpt-6.2-sol" },
 ];
 
 /** subrouter-000 answers much faster than subrouter-best. */
@@ -419,7 +419,7 @@ function deadEndHarness({ cfg = speedConfig, catalog: cat = FAST_CATALOG, canCon
 const STREAM_FAILED = {
   role: "assistant",
   provider: "subrouter-best",
-  model: "gpt-6.1-sol",
+  model: "gpt-6.2-sol",
   stopReason: "error",
   errorMessage: "upstream stream read failed before completion: http2: response body closed",
 };
@@ -435,7 +435,7 @@ test("an unretryable stream failure moves the next request to the following chan
   // Pi ends the run without a retry, and the extension takes over.
   ctx.model = { provider: "router", id: "sol" };
   handlers.get("agent_end")({ messages: [{ role: "user" }, STREAM_FAILED] }, ctx);
-  assert.match(logs.join("\n"), /taking over subrouter-best\/gpt-6\.1-sol/);
+  assert.match(logs.join("\n"), /taking over subrouter-best\/gpt-6\.2-sol/);
 
   // The boundary asks for one more request, which must use the next channel.
   const settle = handlers.get("agent_before_settle")({
@@ -482,10 +482,10 @@ test("takeover completes the initial chain and three repeats before stopping", a
         name: "Sol barato",
         thinkingLevels: ["high"],
         chain: [
-          { model: "subrouter-best/gpt-6.1-sol" },
-          { model: "subrouter-000/gpt-6.1-sol" },
-          { model: "subrouter-fxpayback/gpt-6.1-sol" },
-          { model: "subrouter-xcgx/gpt-6.1-sol" },
+          { model: "subrouter-best/gpt-6.2-sol" },
+          { model: "subrouter-000/gpt-6.2-sol" },
+          { model: "subrouter-fxpayback/gpt-6.2-sol" },
+          { model: "subrouter-xcgx/gpt-6.2-sol" },
         ],
       },
     ],
@@ -493,10 +493,10 @@ test("takeover completes the initial chain and three repeats before stopping", a
   const { registered, handlers, logs, ctx } = deadEndHarness({
     cfg: fourChannel,
     catalog: [
-      { provider: "subrouter-best", id: "gpt-6.1-sol" },
-      { provider: "subrouter-000", id: "gpt-6.1-sol" },
-      { provider: "subrouter-fxpayback", id: "gpt-6.1-sol" },
-      { provider: "subrouter-xcgx", id: "gpt-6.1-sol" },
+      { provider: "subrouter-best", id: "gpt-6.2-sol" },
+      { provider: "subrouter-000", id: "gpt-6.2-sol" },
+      { provider: "subrouter-fxpayback", id: "gpt-6.2-sol" },
+      { provider: "subrouter-xcgx", id: "gpt-6.2-sol" },
     ],
   });
   ctx.model = { provider: "router", id: "sol" };
@@ -513,7 +513,7 @@ test("takeover completes the initial chain and three repeats before stopping", a
           {
             role: "assistant",
             provider: out.model.provider,
-            model: "gpt-6.1-sol",
+            model: "gpt-6.2-sol",
             stopReason: "error",
             errorMessage: "upstream stream read failed before completion: http2: response body closed",
           },
@@ -684,7 +684,7 @@ test("a channel comes back by itself when its cooldown expires, without a new se
           {
             role: "assistant",
             provider,
-            model: "gpt-6.1-sol",
+            model: "gpt-6.2-sol",
             stopReason: "error",
             errorMessage: "upstream stream read failed before completion: http2: response body closed",
           },
@@ -722,7 +722,7 @@ test("a clean run clears the streak of the channel that answered", () => {
   ctx.model = { provider: "router", id: "sol" };
   // A successful end-of-run message from a physical channel.
   handlers.get("agent_end")({
-    messages: [{ role: "assistant", provider: "subrouter-best", model: "gpt-6.1-sol", stopReason: "stop" }],
+    messages: [{ role: "assistant", provider: "subrouter-best", model: "gpt-6.2-sol", stopReason: "stop" }],
   }, ctx);
   // Nothing is rotated and nothing is logged for a clean run.
   assert.equal(logs.filter((l) => l.includes("taking over")).length, 0);
@@ -732,7 +732,7 @@ test("a clean run clears the streak of the channel that answered", () => {
 const http2Failure = {
   role: "assistant",
   provider: "subrouter-fxpayback",
-  model: "gpt-6.1-sol",
+  model: "gpt-6.2-sol",
   stopReason: "error",
   errorMessage: "upstream stream read failed before completion: http2: response body closed",
   usage: { output: 0 },
@@ -741,10 +741,10 @@ const http2Failure = {
 test("a session pinned to a physical model says failover is not active", () => {
   const { fire, logs } = boot();
   // The session selected the channel itself, so no router/* route is ever asked.
-  fire("agent_end", { messages: [http2Failure] }, { model: { provider: "subrouter-fxpayback", id: "gpt-6.1-sol" } });
+  fire("agent_end", { messages: [http2Failure] }, { model: { provider: "subrouter-fxpayback", id: "gpt-6.2-sol" } });
   const reported = logs.find((l) => l.includes("bypasses failover"));
   assert.ok(reported, `expected a bypass report, got: ${logs.join(" | ")}`);
-  assert.match(reported, /subrouter-fxpayback\/gpt-6\.1-sol/);
+  assert.match(reported, /subrouter-fxpayback\/gpt-6\.2-sol/);
   assert.match(reported, /router\/sol/);
 });
 
@@ -753,12 +753,12 @@ test("a virtual model that fails still takes over, as before", () => {
   fire("agent_end", { messages: [http2Failure] }, { model: { provider: "router", id: "sol" } });
   const takeover = logs.find((l) => l.includes("taking over"));
   assert.ok(takeover, `expected a takeover, got: ${logs.join(" | ")}`);
-  assert.match(takeover, /next (subrouter-best|subrouter-000)\/gpt-6\.1-sol/);
+  assert.match(takeover, /next (subrouter-best|subrouter-000)\/gpt-6\.2-sol/);
 });
 
 test("session_start reports a physical selection that has a router equivalent", () => {
   const { fire, logs } = boot();
-  fire("session_start", {}, { model: { provider: "subrouter-best", id: "gpt-6.1-sol" } });
+  fire("session_start", {}, { model: { provider: "subrouter-best", id: "gpt-6.2-sol" } });
   assert.ok(logs.some((l) => l.includes("bypasses failover")), logs.join(" | "));
 });
 
@@ -792,7 +792,7 @@ test("a single-channel failure keeps provider text and enables a bounded repeat"
         id: "solo",
         name: "Solo",
         thinkingLevels: ["high"],
-        chain: [{ model: "subrouter-fxpayback/gpt-6.1-sol" }],
+        chain: [{ model: "subrouter-fxpayback/gpt-6.2-sol" }],
       },
     ],
   };
@@ -818,7 +818,7 @@ test("a virtual never offers a level the router cannot send", () => {
         id: "sol",
         name: "Sol failover",
         thinkingLevels: ["off", "minimal", "high"],
-        chain: [{ model: "subrouter-best/gpt-6.1-sol" }],
+        chain: [{ model: "subrouter-best/gpt-6.2-sol" }],
       },
     ],
   };
@@ -830,7 +830,7 @@ test("a selected off is replaced by a level the channel accepts", () => {
   const cat = [
     {
       provider: "subrouter-best",
-      id: "gpt-6.1-sol",
+      id: "gpt-6.2-sol",
       reasoning: true,
       thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
     },
@@ -842,7 +842,7 @@ test("a selected off is replaced by a level the channel accepts", () => {
         id: "sol",
         name: "Sol failover",
         thinkingLevels: ["high"],
-        chain: [{ model: "subrouter-best/gpt-6.1-sol" }],
+        chain: [{ model: "subrouter-best/gpt-6.2-sol" }],
       },
     ],
   };
@@ -860,7 +860,7 @@ test("a virtual whose only levels are inadmissible still offers usable ones", ()
         id: "sol",
         name: "Sol failover",
         thinkingLevels: ["off", "minimal"],
-        chain: [{ model: "subrouter-best/gpt-6.1-sol" }],
+        chain: [{ model: "subrouter-best/gpt-6.2-sol" }],
       },
     ],
   };
@@ -876,7 +876,7 @@ test("an inadmissible level in the config is reported, not dropped silently", ()
         id: "sol",
         name: "Sol failover",
         thinkingLevels: ["off", "high"],
-        chain: [{ model: "subrouter-best/gpt-6.1-sol" }],
+        chain: [{ model: "subrouter-best/gpt-6.2-sol" }],
       },
     ],
   };

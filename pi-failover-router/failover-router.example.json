@@ -3,8 +3,8 @@
     {
       "provider": "router",
       "id": "sol-barato",
-      "name": "GPT 6.1 Sol — barato",
-      "description": "Canales de gpt-6.",
+      "name": "GPT 6.2 Sol — barato",
+      "description": "Canales de gpt-6.2-sol del mas barato al mas caro. Input 0.039167, output 0.195833, cacheread 0.001729, cachewrite 0.042004 usd por millon de tokens (media de los 6 canales, SubRouter 2026-11-22, tasa 6.8).",
       "order": "cost",
       "thinkingLevels": [
         "low",
@@ -21,16 +21,22 @@
       ],
       "chain": [
         {
-          "model": "subrouter-fxpayback/gpt-6.1-sol"
+          "model": "subrouter-fxpayback/gpt-6.2-sol"
         },
         {
-          "model": "subrouter-best/gpt-6.1-sol"
+          "model": "subrouter-xcgx/gpt-6.2-sol"
         },
         {
-          "model": "subrouter-000/gpt-6.1-sol"
+          "model": "subrouter-fate86api/gpt-6.2-sol"
         },
         {
-          "model": "subrouter-xcgx/gpt-6.1-sol"
+          "model": "subrouter-a6aa/gpt-6.2-sol"
+        },
+        {
+          "model": "subrouter-openai-pro/gpt-6.2-sol"
+        },
+        {
+          "model": "subrouter-lingai/gpt-6.2-sol"
         }
       ]
     },
@@ -68,8 +74,8 @@
     {
       "provider": "router",
       "id": "sol-rapido",
-      "name": "GPT 6.1 Sol — rápido",
-      "description": "Los mismos canales de gpt-6.",
+      "name": "GPT 6.2 Sol — rápido",
+      "description": "Los mismos canales de gpt-6.2-sol, ordenados por tokens por segundo medidos. La medicion se hace al iniciar cada sesion y se refresca cada 15 minutos mientras la sesion siga activa.",
       "order": "speed",
       "thinkingLevels": [
         "low",
@@ -86,16 +92,22 @@
       ],
       "chain": [
         {
-          "model": "subrouter-fxpayback/gpt-6.1-sol"
+          "model": "subrouter-fxpayback/gpt-6.2-sol"
         },
         {
-          "model": "subrouter-best/gpt-6.1-sol"
+          "model": "subrouter-xcgx/gpt-6.2-sol"
         },
         {
-          "model": "subrouter-000/gpt-6.1-sol"
+          "model": "subrouter-fate86api/gpt-6.2-sol"
         },
         {
-          "model": "subrouter-xcgx/gpt-6.1-sol"
+          "model": "subrouter-a6aa/gpt-6.2-sol"
+        },
+        {
+          "model": "subrouter-openai-pro/gpt-6.2-sol"
+        },
+        {
+          "model": "subrouter-lingai/gpt-6.2-sol"
         }
       ]
     },

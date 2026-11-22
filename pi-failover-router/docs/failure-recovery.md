@@ -15,7 +15,7 @@ Signature, taken from `~/.pi/agent/sessions/--home-admin-toural-Apps-rocky-light
 | `errorMessage` | `upstream stream read failed before completion: http2: response body closed` |
 | `usage.output` | `0` |
 | `durationMs` | `304211` and `304222` (two separate occurrences) |
-| Provider | `subrouter-fxpayback`, model `gpt-6.1-sol` |
+| Provider | `subrouter-fxpayback`, model `gpt-6.2-sol` |
 
 Established: the two failures lasted ~304 seconds and produced no output
 tokens. A ~5 minute ceiling with zero output is a timeout signature, not a
@@ -54,8 +54,8 @@ Established from `~/.pi/agent/failover-router.log` for the same session at
 on `subrouter-xcgx`:
 
 ```
-22:08:40.965 router/sol-barato annotating subrouter-xcgx/gpt-6.1-sol for Pi's retry — channel_capability ...; next subrouter-fxpayback/gpt-6.1-sol
-22:08:40.983 router/sol-rapido taking over subrouter-xcgx/gpt-6.1-sol — channel_capability ...; next subrouter-best/gpt-6.1-sol; 2 min cooldown (attempt 1)
+22:08:40.965 router/sol-barato annotating subrouter-xcgx/gpt-6.2-sol for Pi's retry — channel_capability ...; next subrouter-fxpayback/gpt-6.2-sol
+22:08:40.983 router/sol-rapido taking over subrouter-xcgx/gpt-6.2-sol — channel_capability ...; next subrouter-best/gpt-6.2-sol; 2 min cooldown (attempt 1)
 22:08:41.427 rotation recorded; Pi will not continue automatically
 ```
 

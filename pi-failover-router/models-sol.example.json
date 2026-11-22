@@ -1,0 +1,209 @@
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "subrouter-fxpayback": {
+      "name": "fxpayback",
+      "baseUrl": "https://euwest.up.railway.app/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_FXPAYBACK_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.0275,
+            "output": 0.1375,
+            "cacheRead": 0.0,
+            "cacheWrite": 0.0
+          }
+        }
+      ]
+    },
+    "subrouter-xcgx": {
+      "name": "XCGX AI",
+      "baseUrl": "https://euwest.up.railway.app/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_XCGX_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.029412,
+            "output": 0.147059,
+            "cacheRead": 0.001471,
+            "cacheWrite": 0.029412
+          }
+        }
+      ]
+    },
+    "subrouter-fate86api": {
+      "name": "fate86api",
+      "baseUrl": "https://euwest.up.railway.app/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_FATE86API_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.029412,
+            "output": 0.147059,
+            "cacheRead": 0.001471,
+            "cacheWrite": 0.036765
+          }
+        }
+      ]
+    },
+    "subrouter-a6aa": {
+      "name": "a6aa",
+      "baseUrl": "https://euwest.up.railway.app/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_A6AA_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.042794,
+            "output": 0.213971,
+            "cacheRead": 0.00214,
+            "cacheWrite": 0.053493
+          }
+        }
+      ]
+    },
+    "subrouter-openai-pro": {
+      "name": "OpenAI Pro",
+      "baseUrl": "https://euwest.up.railway.app/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_OPENAI_PRO_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.05,
+            "output": 0.25,
+            "cacheRead": 0.0025,
+            "cacheWrite": 0.0625
+          }
+        }
+      ]
+    },
+    "subrouter-lingai": {
+      "name": "LingAI",
+      "baseUrl": "https://euwest.up.railway.app/v1",
+      "api": "openai-completions",
+      "apiKey": "REPLACE_WITH_SUBROUTER_LINGAI_KEY",
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "GPT 6.2 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.055882,
+            "output": 0.279412,
+            "cacheRead": 0.002794,
+            "cacheWrite": 0.069853
+          }
+        }
+      ]
+    }
+  }
+}

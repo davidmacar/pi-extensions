@@ -11,7 +11,7 @@ import {
 /** The shape the catalog declares for a sol channel: off maps to an effort the upstream refuses. */
 const sol = {
   provider: "subrouter-best",
-  id: "gpt-6.1-sol",
+  id: "gpt-6.2-sol",
   reasoning: true,
   thinkingLevelMap: {
     off: "none",
