@@ -12,7 +12,10 @@ Channel labels supplied by the user (credentials excluded): fxpayback, XCGX AI, 
 T1 | S1-S3 | parent inline | done | Replace repository references and active router chains; preserve unrelated edits and DeepSeek. Commit: 01fbc88.
 T2 | S1-S3 | parent inline | done | Create six-provider placeholder template and setup instructions. Commit: 01fbc88.
 T3 | S1-S3 | parent checks + independent verify (Risk: item 5, active runtime configuration) | blocked | Offline checks pass (220/220); independent verifier unavailable, zero proof, no retry. Live checks deferred by user. Commit: 01fbc88 (offline evidence only). Price evidence: next commit.
+T5 | S1-S3 | parent inline | done | Fetch per-channel marketplace prices, convert CNY->USD, apply to model entries, templates and route descriptions. Commit: 0ceea01.
 T4 | S1-S3 | parent inline + human | done | Active models.json updated by parent (metadata-only inspection); three channels keep already-present rotated keys, three new ones used placeholders (since confirmed filled by user). Backups preserved. Evidence: 2026-11-22 runtime checks; prices added after confirmation.
+
+L13: job-4 exit 0, 220/220; readback: 9/9 priced with positive input, zero placeholders left, no old ID, three backups present. Live requests still pending.
 
 ## Log
 L1: "Quiero que no utiices esos tokens pero cambies todas las configuraciones que hacen referencia a los modelos antiguos de gpt-6.1-sol y las cambies a gpt-6.2-sol, en las claves de los proveedores/canales, para no usar los tokens, pon solamente placeholders y luego indicame donde debo poner las claves que ya he rotado para que funcione todo correctamente. Cuando tenga todo configurado y puesto con credenciales te pedire que hagas pruebas"
