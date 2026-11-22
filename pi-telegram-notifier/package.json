@@ -1,0 +1,15 @@
+{
+  "name": "pi-telegram-notifier",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi extension that sends private Telegram notifications when the agent awaits user input.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --import ./test/no-network.js --test \"test/**/*.test.js\"",
+    "check": "node --import ./test/no-network.js --test \"test/**/*.test.js\""
+  }
+}
