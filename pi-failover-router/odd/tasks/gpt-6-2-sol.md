@@ -9,9 +9,9 @@ S3: "quiero que se mantenga el sol-rápido y el sol-barato pero con estee nuevo 
 Channel labels supplied by the user (credentials excluded): fxpayback, XCGX AI, fate86api, a6aa, OpenAI Pro, LingAI.
 
 ## Tasks
-T1 | S1-S3 | parent inline | done | Replace repository references and active router chains; preserve unrelated edits and DeepSeek. Commit: pending.
-T2 | S1-S3 | parent inline | done | Create six-provider placeholder template and setup instructions. Commit: pending.
-T3 | S1-S3 | parent checks + independent verify (Risk: item 5, active runtime configuration) | blocked | Offline checks pass (220/220); independent verifier unavailable, zero proof, no retry. Live checks deferred by user. Commit: pending.
+T1 | S1-S3 | parent inline | done | Replace repository references and active router chains; preserve unrelated edits and DeepSeek. Commit: 01fbc88.
+T2 | S1-S3 | parent inline | done | Create six-provider placeholder template and setup instructions. Commit: 01fbc88.
+T3 | S1-S3 | parent checks + independent verify (Risk: item 5, active runtime configuration) | blocked | Offline checks pass (220/220); independent verifier unavailable, zero proof, no retry. Live checks deferred by user. Commit: 01fbc88 (offline evidence only).
 T4 | S1-S3 | human | blocked | Wait for user to sanitize/merge `~/.pi/agent/models.json`, remove old model entries and populate rotated keys locally; agent must not read credential-bearing files. Commit: n/a.
 
 ## Log
@@ -23,4 +23,5 @@ L6: T1 observed RED: 3 tests, 1 pass, 2 failures (old example name and missing p
 L7: T2: created repository template, staged identical `~/.pi/agent/models-sol.placeholders.json`, and setup guide. Structural active-router check passes: four virtuals, six channels per Sol route, DeepSeek deep equality, identical template copies. Full offline suite launched as job-1. Transport/limits unverified, explicit in setup guide.
 L8: Full offline suite initially failed (217/220 pass): five escaped regex expectations had not been version-updated, including two negative assertions. One correction batch updated all five; focused+full checks running as job-2. Independent verifier mws7dxj3-3-rjvx unavailable before evidence; no retry. Required independent proof remains unavailable; T3 cannot be claimed complete.
 L9: job-2 exit 0: focused Sol/router checks pass and full suite 220/220 pass, no skipped/cancelled tests. Structural check and git diff --check pass. No runtime source edited by this feature, so no unrequested-command differential check applies. S1 overall partial: active providers and external tester configs remain untouched; S2-S3 verified only for active router and secret-free examples. Independent verification unavailable; feature not fully verified.
+L10: Local commit 01fbc88 contains only this feature; unrelated hunks remain unstaged. Authored feature slice: 484 changed lines including templates/tests/tracker (over the ~400 advisory boundary, coherent configuration unit); tracker evidence follows separately. Branch inherited earlier unrelated commits: do not publish the accumulated branch without reviewing delivery shape. No push/PR. Readback confirms existing mixed test changes preserved except requested model substitutions.
 L5: Configured explorer previously failed before launch: Model "router/deepseek-rapido:high" not found. No explorer retry; known configuration/docs evidence reused. Forecast about 350 authored changed lines; local commit only, no publishing.
