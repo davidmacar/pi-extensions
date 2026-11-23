@@ -14,13 +14,20 @@
  * @returns {Array<{model: string, thinkingLevel?: string}>}
  */
 export function orderBySpeed(chain, cache, tps) {
-  const measured = chain
-    .map((step, index) => ({ step, index, speed: cache ? tps(cache, step.model) : undefined }))
-    .filter((row) => row.speed !== undefined)
+  const rows = chain.map((step, index) => ({
+    step,
+    index,
+    speed: cache ? tps(cache, step.model) : undefined,
+    failed: cache?.channels?.[step.model]?.attempts?.at?.(-1)?.ok === false,
+  }));
+  const measured = rows
+    .filter((row) => row.speed !== undefined && !row.failed)
     .sort((a, b) => b.speed - a.speed || a.index - b.index);
-  const unmeasured = chain
-    .map((step, index) => ({ step, index, speed: cache ? tps(cache, step.model) : undefined }))
-    .filter((row) => row.speed === undefined)
+  const unmeasured = rows
+    .filter((row) => row.speed === undefined && !row.failed)
     .sort((a, b) => a.index - b.index);
-  return [...measured, ...unmeasured].map((row) => row.step);
+  const failed = rows
+    .filter((row) => row.failed)
+    .sort((a, b) => a.index - b.index);
+  return [...measured, ...unmeasured, ...failed].map((row) => row.step);
 }

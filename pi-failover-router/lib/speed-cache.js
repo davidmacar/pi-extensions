@@ -99,9 +99,16 @@ export function normalizeCache(doc) {
       attempts.push({ at: failureAt, ok: false, message: failureMessage ?? "" });
     }
     const kept = attempts.slice(-MAX_ATTEMPTS);
-    if (samples.length === 0 && kept.length === 0) continue;
-    const normalized = { samples, measuredAt, attempts: kept };
+    // A failed probe invalidates any previous speed. Keep the attempt history for
+    // diagnostics, but never let stale throughput rank a channel after failure.
+    const latest = kept[kept.length - 1];
+    const usableSamples = latest && !latest.ok ? [] : samples;
+    const usableMeasuredAt = latest && !latest.ok ? 0 : measuredAt;
+    if (usableSamples.length === 0 && kept.length === 0) continue;
+    const normalized = { samples: usableSamples, measuredAt: usableMeasuredAt, attempts: kept };
     if (tier !== undefined) normalized.timeoutTierMs = tier;
+    // Retire the obsolete model id at read time so an old cache cannot revive it.
+    if (ref.endsWith("/gpt-6.1-sol") || ref === "gpt-6.1-sol") continue;
     cache.channels[ref] = normalized;
   }
   return cache;
@@ -114,6 +121,23 @@ export function parseCacheText(text) {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Drops measurements for channels no longer present in the active router config.
+ * This keeps old model/channel refs, including retired model ids, from returning
+ * when the cache is persisted again.
+ *
+ * @param {ReturnType<typeof emptyCache>|undefined} cache
+ * @param {string[]} refs configured physical channel refs
+ */
+export function pruneCache(cache, refs) {
+  const base = cache ?? emptyCache();
+  const allowed = new Set(refs);
+  const channels = Object.fromEntries(
+    Object.entries(base.channels).filter(([ref]) => allowed.has(ref)),
+  );
+  return { ...base, channels };
 }
 
 /**
@@ -181,8 +205,10 @@ export function recordFailure(cache, ref, message, now) {
   const base = cache ?? emptyCache();
   const previous = base.channels[ref];
   const entry = {
-    samples: previous?.samples ?? [],
-    measuredAt: previous?.measuredAt ?? 0,
+    // A failed probe must not leave the prior successful speed eligible for
+    // ordering. The attempt history remains available for diagnosis.
+    samples: [],
+    measuredAt: 0,
     attempts: withAttempt(previous?.attempts, {
       at: now,
       ok: false,

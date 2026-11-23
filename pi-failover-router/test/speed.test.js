@@ -10,12 +10,14 @@ import {
   normalizeCache,
   parseCacheText,
   probeIsDue,
+  pruneCache,
   recordFailure,
   recordSample,
   startingTier,
   tokensPerSecond,
 } from "../lib/speed-cache.js";
 import { orderBySpeed } from "../lib/speed-order.js";
+import { PROBE_MAX_TOKENS } from "../lib/speed-probe.js";
 
 const REF = "subrouter-znu/deepseek-v4.1-flash-1017";
 
@@ -134,16 +136,26 @@ test("a failed probe is recorded so the channel is retried and visible", () => {
   assert.deepEqual(dueRefs(cache, [REF], now + 1), [REF], "a failed channel is due again immediately");
 });
 
-test("a failure keeps the samples a channel already had", () => {
+test("a failed probe clears prior speed and leaves the channel unranked", () => {
   const now = 1_000_000;
   let cache = recordSample(emptyCache(), REF, 40, now - SPEED_TTL_MS - 1);
   cache = recordFailure(cache, REF, "boom", now);
-  assert.equal(tokensPerSecond(cache, REF), 40, "a known channel stays known after one failure");
+  assert.equal(tokensPerSecond(cache, REF), undefined, "a failed channel has no usable speed");
+  assert.deepEqual(cache.channels[REF].samples, []);
+  assert.equal(cache.channels[REF].measuredAt, 0);
   assert.deepEqual(
     cache.channels[REF].attempts.map((a) => a.ok),
     [true, false],
-    "the failure is appended to the attempts, not over the sample",
+    "the failure remains in the diagnostic attempt history",
   );
+});
+
+test("a failed channel is placed after measured channels until it succeeds", () => {
+  const chain = [{ model: "a/one" }, { model: REF }];
+  let cache = recordSample(emptyCache(), "a/one", 10, 1);
+  cache = recordSample(cache, REF, 40, 1);
+  cache = recordFailure(cache, REF, "boom", 2);
+  assert.deepEqual(orderBySpeed(chain, cache, tokensPerSecond).map((step) => step.model), ["a/one", REF]);
 });
 
 test("a later success clears the remembered failure", () => {
@@ -189,6 +201,10 @@ test("cache version 1 is still readable and upgraded", () => {
   });
   assert.equal(tokensPerSecond(legacy, REF), 20, "a legacy cache reads as its newest sample");
   assert.deepEqual(legacy.channels[REF].attempts, [], "a version 1 cache records no attempts");
+});
+
+test("speed probes request at most 50 output tokens", () => {
+  assert.equal(PROBE_MAX_TOKENS, 50);
 });
 
 test("the probe module re-exports the same timeout tiers as the cache", async () => {
@@ -304,7 +320,7 @@ test("the probe asks for a level the channel accepts, never off", async () => {
   const { probeChannels } = await import("../lib/speed-probe.js");
   const seen = [];
   const complete = async (model, _context, options) => {
-    seen.push(options.thinkingLevel);
+    seen.push(options);
     // The measurement divides tokens by elapsed time, so a reply in the same
     // millisecond would be rejected as "no elapsed time".
     await new Promise((done) => setTimeout(done, 5));
@@ -324,8 +340,9 @@ test("the probe asks for a level the channel accepts, never off", async () => {
   });
   assert.equal(measured.length, 1);
   assert.equal(seen.length, 1);
-  assert.notEqual(seen[0], "off", "reasoning must never be switched off for a channel that refuses it");
-  assert.equal(seen[0], "low");
+  assert.notEqual(seen[0].thinkingLevel, "off", "reasoning must never be switched off for a channel that refuses it");
+  assert.equal(seen[0].thinkingLevel, "low");
+  assert.equal(seen[0].maxTokens, 50);
 });
 
 test("a channel that answers with an error is not retried on a wider tier", async () => {
@@ -430,6 +447,31 @@ test("only the last five attempts are kept", () => {
   assert.equal(attempts.length, 5);
   assert.match(attempts[0].message, /failure 3/);
   assert.match(attempts[4].message, /failure 7/);
+});
+
+test("legacy failed entries cannot retain their old speed", () => {
+  const legacy = normalizeCache({
+    kind: "pi-failover-router.speed",
+    version: 3,
+    channels: { [REF]: { samples: [40], measuredAt: 5, attempts: [{ at: 6, ok: false, message: "boom" }] } },
+  });
+  assert.equal(tokensPerSecond(legacy, REF), undefined);
+  assert.deepEqual(legacy.channels[REF].samples, []);
+});
+
+test("stale and unconfigured cache refs are pruned", () => {
+  const cache = normalizeCache({
+    kind: "pi-failover-router.speed",
+    version: 3,
+    channels: {
+      [REF]: { samples: [10], measuredAt: 5 },
+      "subrouter-old/gpt-6.1-sol": { samples: [99], measuredAt: 5 },
+      "subrouter-best/gpt-6.2-sol": { samples: [20], measuredAt: 5 },
+    },
+  });
+  const pruned = pruneCache(cache, [REF, "subrouter-best/gpt-6.2-sol"]);
+  assert.deepEqual(Object.keys(pruned.channels), [REF, "subrouter-best/gpt-6.2-sol"]);
+  assert.deepEqual(Object.keys(pruneCache(cache, [REF]).channels), [REF]);
 });
 
 test("a cache stored before attempts existed keeps its error as an attempt", () => {

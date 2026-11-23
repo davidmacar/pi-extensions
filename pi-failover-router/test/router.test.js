@@ -14,12 +14,19 @@ process.env.PI_FAILOVER_ROUTER_LOG = TEST_DECISION_LOG;
 process.env.PI_FAILOVER_ROUTER_NO_PATCHER = "1";
 
 /** Minimal fake ExtensionAPI + model registry that records routing decisions. */
-function harness({ config, catalog }) {
+function harness({ config, catalog, subrouterFetch }) {
   const registered = [];
   const logs = [];
   const handlers = new Map();
+  const defaultPriceRows = [...new Set(config.virtuals.flatMap(def => def.chain.map(step => step.model)))].map(ref => {
+    const slash = ref.indexOf("/");
+    const provider = ref.slice(0, slash);
+    return { provider_slug: provider.startsWith("subrouter-") ? provider.slice("subrouter-".length) : provider,
+      model_name: ref.slice(slash + 1), input_price: 1, price_currency: "USD" };
+  });
   const pi = {
     log: (m) => logs.push(m),
+    subrouterFetch: subrouterFetch ?? (async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: defaultPriceRows }) })),
     registerVirtualModel: (def) => registered.push(def),
     on: (name, fn) => {
       const list = handlers.get(name) ?? [];
@@ -64,13 +71,16 @@ const config = {
 function boot(cfg = config, cat = catalog) {
   const h = harness({ config: cfg, catalog: cat });
   const path = join(tmpdir(), `pi-failover-router-test-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  const pricePath = join(tmpdir(), `pi-failover-router-price-test-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(path, JSON.stringify(cfg));
   // A test must never write into the user's real decision log.
   const decisionLog = join(tmpdir(), `pi-failover-router-log-${process.pid}-${Math.random().toString(36).slice(2)}.log`);
   process.env.PI_FAILOVER_ROUTER_CONFIG = path;
+  process.env.PI_FAILOVER_ROUTER_PRICE_CACHE = pricePath;
   process.env.PI_FAILOVER_ROUTER_LOG = decisionLog;
   failoverRouter(h.pi);
   delete process.env.PI_FAILOVER_ROUTER_CONFIG;
+  delete process.env.PI_FAILOVER_ROUTER_PRICE_CACHE;
   process.env.PI_FAILOVER_ROUTER_LOG = TEST_DECISION_LOG;
   return { ...h, decisionLog };
 }
@@ -81,6 +91,31 @@ test("registers one virtual model per configured entry", () => {
   assert.equal(registered[0].provider, "router");
   assert.equal(registered[0].id, "sol");
   assert.deepEqual(registered[0].thinkingLevels, ["high", "xhigh"]);
+});
+
+test("first user request waits for session prices before routing", async () => {
+  let resolveResponse;
+  const pendingResponse = new Promise(resolve => { resolveResponse = resolve; });
+  const h = harness({ config, catalog, subrouterFetch: async () => pendingResponse });
+  const path = join(tmpdir(), `pi-failover-router-prices-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  const pricePath = join(tmpdir(), `pi-failover-router-price-pending-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(path, JSON.stringify(config));
+  process.env.PI_FAILOVER_ROUTER_CONFIG = path;
+  process.env.PI_FAILOVER_ROUTER_PRICE_CACHE = pricePath;
+  failoverRouter(h.pi);
+  delete process.env.PI_FAILOVER_ROUTER_CONFIG;
+  delete process.env.PI_FAILOVER_ROUTER_PRICE_CACHE;
+  h.fire("session_start", {});
+  const route = h.registered[0].route({ reason: "user", messages: [] }, h.ctx);
+  assert.equal(typeof route?.then, "function");
+  resolveResponse({ ok: true, json: async () => ({ success: true, data: [
+    { provider_slug: "best", model_name: "gpt-6.2-sol", input_price: 4, price_currency: "USD" },
+    { provider_slug: "000", model_name: "gpt-6.2-sol", input_price: 2, price_currency: "USD" },
+    { provider_slug: "fxpayback", model_name: "gpt-6.2-sol", input_price: 1, price_currency: "USD" },
+  ] }) });
+  const result = await route;
+  h.fire("session_shutdown", {});
+  assert.equal(result.model.provider, "subrouter-fxpayback");
 });
 
 test("first user request goes to the cheapest candidate", () => {
@@ -244,13 +279,16 @@ test("an explicit chain step level wins over the selected level", () => {
 });
 
 /** Registry that answers probes after a per-channel delay, so throughput differs. */
-function probeHarness({ cfg, catalog, output = 20, latencyMs = () => 20 }) {
+function probeHarness({ cfg, catalog, output = 20, latencyMs = () => 20, initialSpeedCache }) {
   const registered = [];
   const handlers = new Map();
   const logs = [];
   const speedPath = join(tmpdir(), `pi-failover-router-speed-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  const pricePath = join(tmpdir(), `pi-failover-router-price-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  if (initialSpeedCache) writeFileSync(speedPath, JSON.stringify(initialSpeedCache));
   const pi = {
     log: (m) => logs.push(m),
+    subrouterFetch: async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: [{ model_name: "gpt-6.2-sol", input_price: 1, price_currency: "USD" }] }) }),
     registerVirtualModel: (def) => registered.push(def),
     on: (event, handler) => handlers.set(event, handler),
   };
@@ -269,10 +307,12 @@ function probeHarness({ cfg, catalog, output = 20, latencyMs = () => 20 }) {
   writeFileSync(path, JSON.stringify(cfg));
   process.env.PI_FAILOVER_ROUTER_CONFIG = path;
   process.env.PI_FAILOVER_ROUTER_SPEED_CACHE = speedPath;
+  process.env.PI_FAILOVER_ROUTER_PRICE_CACHE = pricePath;
   process.env.PI_FAILOVER_ROUTER_LOG = decisionLog;
   failoverRouter(pi);
   delete process.env.PI_FAILOVER_ROUTER_CONFIG;
   delete process.env.PI_FAILOVER_ROUTER_SPEED_CACHE;
+  delete process.env.PI_FAILOVER_ROUTER_PRICE_CACHE;
   process.env.PI_FAILOVER_ROUTER_LOG = TEST_DECISION_LOG;
   return { registered, handlers, logs, ctx, speedPath, decisionLog };
 }
@@ -346,6 +386,24 @@ test("session_start measures, persists, and the fastest channel then wins", asyn
   assert.equal(Object.keys(persisted.channels).length, 2);
 });
 
+test("cost-only router startup prunes obsolete entries from the speed cache", () => {
+  const h = probeHarness({
+    cfg: { virtuals: [{ ...speedConfig.virtuals[1], order: "cost" }] },
+    catalog: FAST_CATALOG,
+    initialSpeedCache: {
+      kind: "pi-failover-router.speed",
+      version: 3,
+      channels: {
+        "subrouter-old/gpt-6.1-sol": { samples: [99], measuredAt: 5, attempts: [] },
+        "subrouter-old/unconfigured": { samples: [88], measuredAt: 5, attempts: [] },
+      },
+    },
+  });
+  h.handlers.get("session_shutdown")?.();
+  const persisted = JSON.parse(readFileSync(h.speedPath, "utf8"));
+  assert.deepEqual(persisted.channels, {});
+});
+
 test("a chain with cost order ignores speed measurements", async () => {
   const { registered, handlers, ctx } = probeHarness({ cfg: speedConfig, catalog: FAST_CATALOG, latencyMs: latency });
   const cheap = registered.find((r) => r.id === "sol");
@@ -399,6 +457,7 @@ function deadEndHarness({ cfg = speedConfig, catalog: cat = FAST_CATALOG, canCon
   const logs = [];
   const pi = {
     log: (m) => logs.push(m),
+    subrouterFetch: async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: [{ model_name: "gpt-6.2-sol", input_price: 1, price_currency: "USD" }] }) }),
     registerVirtualModel: (def) => registered.push(def),
     on: (event, handler) => handlers.set(event, handler),
   };

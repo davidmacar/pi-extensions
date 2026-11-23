@@ -16,7 +16,7 @@ import { supportedLevels } from "./thinking-level.js";
 export { PROBE_TIMEOUT_TIERS_MS };
 
 export const PROBE_PROMPT = "Reply with the single word: ok";
-export const PROBE_MAX_TOKENS = 100;
+export const PROBE_MAX_TOKENS = 50;
 /**
  * Silence budget for a channel no tier has been recorded for. The tiers
  * themselves are the budgets; this is only the baseline used to decide.

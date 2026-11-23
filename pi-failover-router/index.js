@@ -24,7 +24,16 @@ import { classifyFailure, cooldownMs } from "./lib/classify.js";
 import { createDecisionLog } from "./lib/decision-log.js";
 import { buildChannelsSnapshot, CHANNELS_SNAPSHOT_EVENT } from "./lib/channels-snapshot.js";
 import { decidePatchAction } from "./lib/patch-guard.js";
-import { newRecovery, planRecovery, dispatchRecovery, waitForCooldown } from "./lib/recovery.js";
+import {
+  newRecovery,
+  planRecovery,
+  dispatchRecovery,
+  waitForCooldown,
+  newPhysicalRecovery,
+  planPhysicalRecovery,
+  physicalWaitMs,
+  MAX_PHYSICAL_ATTEMPTS,
+} from "./lib/recovery.js";
 import { buildStamp } from "./lib/build-stamp.js";
 import { retryableErrorText } from "./lib/retry-bridge.js";
 import { DEFAULT_LEVELS, isAdmissible, resolveLevel } from "./lib/thinking-level.js";
@@ -32,6 +41,7 @@ import { ConfigError, loadRouterConfig } from "./lib/config.js";
 import {
   dueRefs,
   emptyCache,
+  pruneCache,
   readSpeedCache,
   recordFailure,
   recordSample,
@@ -41,11 +51,17 @@ import {
 import { orderBySpeed } from "./lib/speed-order.js";
 import { probeChannels } from "./lib/speed-probe.js";
 import { lastAssistantMessage, resolveDeadEnd } from "./lib/dead-end.js";
+import { emptyPriceCache, orderByPrice, priceSnapshot, prunePriceCache, readPriceCache, recordPrices } from "./lib/price-cache.js";
+import { fetchSubrouterPrices } from "./lib/subrouter-prices.js";
 
 export const DEFAULT_CONFIG_FILE = "failover-router.json";
 export const DEFAULT_SPEED_FILE = "failover-router-speed.json";
+export const DEFAULT_PRICE_FILE = "failover-router-price.json";
 /** How often an active session refreshes its measurements. */
 export const SPEED_REFRESH_MS = 15 * 60_000;
+/** How often an active Pi session refreshes marketplace prices. */
+export const PRICE_REFRESH_MS = 60 * 60_000;
+export const PRICES_EVENT = "failover-router:prices";
 /**
  * How long a request may wait for the measurement session before routing with
  * whatever measurements already exist. A probe must never turn into a hang.
@@ -117,6 +133,9 @@ export default function failoverRouter(pi) {
   const speedPath = resolve(
     expandHome(process.env.PI_FAILOVER_ROUTER_SPEED_CACHE || join("~/.pi/agent", DEFAULT_SPEED_FILE)),
   );
+  const pricePath = resolve(
+    expandHome(process.env.PI_FAILOVER_ROUTER_PRICE_CACHE || join("~/.pi/agent", DEFAULT_PRICE_FILE)),
+  );
 
   /** model id -> epoch ms until which it is skipped */
   const cooldowns = new Map();
@@ -124,9 +143,15 @@ export default function failoverRouter(pi) {
   const lastRouted = new Map();
   /** Latest measurements, shared by every virtual that orders by speed. */
   let speedCache = emptyCache();
+  /** Latest public marketplace prices, shared by cost-ordered virtuals. */
+  let priceCache = emptyPriceCache();
   /** The measurement session in flight, if any. */
   let measurement = null;
+  /** The price refresh in flight, if any. */
+  let priceRefresh = null;
   const recovery = new Map();
+  const physicalRecovery = new Map();
+  const physicalWaits = new Map();
   const resetRecovery = new Set();
   // Timers/controllers are deliberately kept out of Pi's JSON route state.
   const recoveryWaits = new Map();
@@ -144,6 +169,12 @@ export default function failoverRouter(pi) {
     stopRecovery(key);
     recovery.delete(key);
     resetRecovery.add(key);
+  };
+  const clearPhysicalRecovery = (key) => {
+    physicalRecovery.delete(key);
+    const waiting = physicalWaits.get(key);
+    waiting?.controller.abort();
+    physicalWaits.delete(key);
   };
   // Share the dispatch, not callers' cancellation: each observer owns its
   // signal. Cancel the episode's timer only when nobody is waiting anymore.
@@ -198,6 +229,7 @@ export default function failoverRouter(pi) {
   if (virtuals.length === 0) return;
 
   speedCache = readSpeedCache(speedPath, { readFile: readFileSync }) ?? emptyCache();
+  priceCache = readPriceCache(pricePath, { readFile: readFileSync }) ?? emptyPriceCache();
 
   /**
    * Publishes the snapshot the Channels card paints: what routing already knows,
@@ -208,7 +240,7 @@ export default function failoverRouter(pi) {
     try {
       pi.events?.emit?.(
         CHANNELS_SNAPSHOT_EVENT,
-        buildChannelsSnapshot({ virtuals, speedCache, cooldowns, lastRouted, now: Date.now() }),
+        buildChannelsSnapshot({ virtuals, speedCache, priceCache, cooldowns, lastRouted, now: Date.now() }),
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -222,7 +254,9 @@ export default function failoverRouter(pi) {
    * fastest winning; a chain with no measurement at all keeps its configured order.
    */
   const chainFor = (def) =>
-    def.order === "speed" ? orderBySpeed(def.chain, speedCache, tokensPerSecond) : def.chain;
+    def.order === "speed"
+      ? orderBySpeed(def.chain, speedCache, tokensPerSecond)
+      : orderByPrice(def.chain, priceCache);
 
   const virtualKey = (def) => `${def.provider}/${def.id}`;
 
@@ -251,6 +285,39 @@ export default function failoverRouter(pi) {
       return virtuals.find(def => virtualKey(def) === `${selected.provider}/${selected.id}`);
     }
     return virtuals.find(def => def.chain.some(step => step.model === failedModel));
+  };
+
+  const selectedPhysical = (ctx) => {
+    const selected = ctx?.model;
+    if (!selected?.provider || !selected?.id) return undefined;
+    if (virtuals.some(def => virtualKey(def) === `${selected.provider}/${selected.id}`)) return undefined;
+    return selected;
+  };
+
+  const physicalFailure = (ctx, message) => {
+    const selected = selectedPhysical(ctx);
+    if (!selected || message?.provider !== selected.provider || message?.model !== selected.id) return undefined;
+    const key = `${selected.provider}/${selected.id}`;
+    const verdict = classifyFailure(message.errorMessage);
+    if (!verdict.rotate) {
+      clearPhysicalRecovery(key);
+      return undefined;
+    }
+    let state = physicalRecovery.get(key);
+    if (!state) {
+      state = newPhysicalRecovery();
+      physicalRecovery.set(key, state);
+    }
+    planPhysicalRecovery(
+      state,
+      message.errorMessage,
+      `${message.provider}/${message.model}:${message.timestamp ?? ""}`,
+    );
+    log(`failover-router: physical ${key} failure ${state.attempts}/${MAX_PHYSICAL_ATTEMPTS} — ${verdict.kind}`);
+    if (state.exhausted) {
+      log(`failover-router: physical ${key} recovery exhausted after ${MAX_PHYSICAL_ATTEMPTS} attempts; last error: ${state.error}`);
+    }
+    return { key, state };
   };
 
   // Both native retry and terminal takeover consume the same planned decision.
@@ -434,6 +501,20 @@ export default function failoverRouter(pi) {
           published = true;
           publishChannels();
         }
+        // Cost routing waits for the current marketplace refresh so the first
+        // selection uses fresh prices. Each underlying request has a bounded
+        // timeout, and refresh failures preserve the last known cache.
+        if (def.order !== "speed" && priceRefresh) {
+          const inFlightPrices = priceRefresh;
+          return inFlightPrices.then(() => decideRoute(def, key, request, ctx));
+        }
+        // A cost-ordered route should not make its first choice from stale or
+        // configured-order data while the session-start marketplace refresh is
+        // still running. Each request is bounded by PRICE_FETCH_TIMEOUT_MS.
+        if (def.order !== "speed" && priceRefresh) {
+          const inFlightPrices = priceRefresh;
+          return inFlightPrices.then(() => decideRoute(def, key, request, ctx));
+        }
         // The measurement session starts with the session and runs before the
         // first request. Waiting for it here is what makes that first request
         // already use measured throughput — but only up to a budget, because a
@@ -468,6 +549,7 @@ export default function failoverRouter(pi) {
     const message = event?.message;
     if (message?.role !== "assistant") return undefined;
     if (message.stopReason === "error") {
+      if (!selectedDefinition(ctx, `${message.provider}/${message.model}`)) physicalFailure(ctx, message);
       const ref = `${message.provider}/${message.model}`;
       const def = selectedDefinition(ctx, ref);
       if (!def) return undefined;
@@ -488,6 +570,10 @@ export default function failoverRouter(pi) {
     const ref = `${message.provider}/${message.model}`;
     if (message.stopReason !== "aborted") noteSuccess(failureStreak, ref);
     const def = selectedDefinition(ctx, ref);
+    if (!def) {
+      if (message.stopReason !== "aborted") clearPhysicalRecovery(ref);
+      return undefined;
+    }
     if (def) {
       const key = virtualKey(def);
       if (message.stopReason === "aborted") stopRecovery(key);
@@ -502,6 +588,8 @@ export default function failoverRouter(pi) {
     const failedModel = `${last?.provider}/${last?.model}`;
     const def = selectedDefinition(ctx, failedModel);
     if (!def) {
+      if (failure) physicalFailure(ctx, last);
+      else if (last && last.stopReason !== "aborted") clearPhysicalRecovery(failedModel);
       const bypass = bypassReport(ctx?.model);
       if (bypass) log(bypass);
       return;
@@ -521,9 +609,45 @@ export default function failoverRouter(pi) {
 
   pi.on?.("agent_before_settle", (event, ctx) => {
     if (event?.outcome !== "error") return undefined;
-    const selected = ctx?.model;
-    const state = selected?.provider && selected?.id
-      ? recovery.get(`${selected.provider}/${selected.id}`)
+    const selected = selectedPhysical(ctx);
+    if (selected) {
+      const key = `${selected.provider}/${selected.id}`;
+      const state = physicalRecovery.get(key);
+      if (state && !state.exhausted && !state.stopped && state.markerAttempt !== state.attempts) {
+        const waitMs = physicalWaitMs(state.attempts);
+        const continueRun = () => {
+          if (ctx?.signal?.aborted || physicalRecovery.get(key) !== state || state.exhausted) return undefined;
+          state.markerAttempt = state.attempts;
+          log(`failover-router: physical ${key} continuing after attempt ${state.attempts}/${MAX_PHYSICAL_ATTEMPTS}`);
+          return {
+            entries: [
+              ...(event.entries ?? []),
+              {
+                type: "custom_message",
+                customType: "failover-router.physical-continue",
+                content: "Retry the current task on the selected physical model. Use the existing tool results; do not repeat completed actions.",
+                display: false,
+              },
+            ],
+            continue: true,
+          };
+        };
+        if (waitMs === 0) return continueRun();
+        const existing = physicalWaits.get(key);
+        if (existing) return existing.promise.then(continueRun);
+        log(`failover-router: physical ${key} waiting ${waitMs / 60_000} minutes after attempt ${state.attempts}/${MAX_PHYSICAL_ATTEMPTS}`);
+        const controller = new AbortController();
+        const waiting = { controller };
+        waiting.promise = waitForCooldown(waitMs, controller.signal).finally(() => {
+          if (physicalWaits.get(key) === waiting) physicalWaits.delete(key);
+        });
+        physicalWaits.set(key, waiting);
+        return waiting.promise.then(continueRun);
+      }
+      return undefined;
+    }
+    const state = ctx?.model?.provider && ctx?.model?.id
+      ? recovery.get(`${ctx.model.provider}/${ctx.model.id}`)
       : [...recovery.values()].find(state => state.pending);
     if (!state?.pending || state.exhausted || state.stopped || ctx?.signal?.aborted) return undefined;
     // One marker per dispatch. Returning the prior proposals preserves other
@@ -550,10 +674,14 @@ export default function failoverRouter(pi) {
   // hooks. Clear exhausted episodes here, not on reason:user (markers use it too).
   pi.on?.("before_agent_start", () => {
     for (const key of recovery.keys()) clearRecovery(key);
+    physicalRecovery.clear();
+    physicalWaits.clear();
     for (const def of virtuals) resetRecovery.add(virtualKey(def));
   });
   pi.on?.("session_start", (_event, ctx) => {
     failureStreak.clear();
+    physicalRecovery.clear();
+    physicalWaits.clear();
     for (const key of recovery.keys()) clearRecovery(key);
     for (const def of virtuals) resetRecovery.add(virtualKey(def));
     published = false;
@@ -619,15 +747,62 @@ export default function failoverRouter(pi) {
     guardChannelsCard(ctx);
   });
 
-  // ---- throughput measurement -------------------------------------------------
-  const refs = [
+  // ---- throughput and marketplace refresh ------------------------------------
+  const refs = [...new Set(virtuals.flatMap((def) => def.chain.map((s) => s.model)))];
+  const speedRefs = [
     ...new Set(virtuals.filter((def) => def.order === "speed").flatMap((def) => def.chain.map((s) => s.model))),
   ];
-  if (refs.length === 0) return;
+
+  const persistPrices = () => {
+    priceCache = prunePriceCache(priceCache, refs);
+    try {
+      const temporary = `${pricePath}.tmp-${process.pid}`;
+      writeFileSync(temporary, `${JSON.stringify(priceCache, null, 2)}\n`);
+      renameSync(temporary, pricePath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`failover-router: could not persist marketplace prices: ${message}`);
+    }
+  };
+  persistPrices();
+
+  const refreshPrices = () => {
+    if (priceRefresh) return priceRefresh;
+    priceRefresh = fetchSubrouterPrices(refs, {
+      fetchImpl: pi.subrouterFetch ?? globalThis.fetch,
+      log,
+    }).then(({ prices, failures }) => {
+      if (Object.keys(prices).length > 0) {
+        priceCache = recordPrices(priceCache, prices, Date.now());
+        persistPrices();
+        publishChannels();
+        try { pi.events?.emit?.(PRICES_EVENT, priceSnapshot(priceCache, refs)); } catch {}
+      }
+      if (failures.length > 0) log(`failover-router: ${failures.length} marketplace price fetch(es) failed`);
+    }).catch(error => {
+      log(`failover-router: marketplace price refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+    }).finally(() => {
+      priceRefresh = null;
+    });
+    return priceRefresh;
+  };
 
   let refreshTimer = undefined;
+  let priceTimer = undefined;
+  pi.on?.("session_start", () => {
+    void refreshPrices();
+    if (priceTimer === undefined) {
+      priceTimer = setInterval(() => { void refreshPrices(); }, PRICE_REFRESH_MS);
+      priceTimer.unref?.();
+    }
+  });
+  pi.on?.("session_shutdown", () => {
+    if (priceTimer !== undefined) clearInterval(priceTimer);
+    priceTimer = undefined;
+  });
 
   const persist = () => {
+    speedCache = pruneCache(speedCache, speedRefs);
     try {
       const temporary = `${speedPath}.tmp-${process.pid}`;
       writeFileSync(temporary, `${JSON.stringify(speedCache, null, 2)}\n`);
@@ -637,6 +812,12 @@ export default function failoverRouter(pi) {
       log(`failover-router: could not persist speed measurements: ${message}`);
     }
   };
+
+  // Persist once at load so obsolete refs are removed even when no probe is due
+  // or the router has cost-only virtuals.
+  persist();
+
+  if (speedRefs.length === 0) return;
 
   const runProbe = (ctx, pending) => {
     if (measurement) return measurement;
@@ -684,7 +865,7 @@ export default function failoverRouter(pi) {
 
   const measureIfDue = (ctx) => {
     // Only the channels that are stale, never measured, or last failed.
-    const pending = dueRefs(speedCache, refs, Date.now());
+    const pending = dueRefs(speedCache, speedRefs, Date.now());
     if (pending.length === 0) return;
     void runProbe(ctx, pending);
   };

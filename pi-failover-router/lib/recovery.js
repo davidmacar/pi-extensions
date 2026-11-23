@@ -1,6 +1,12 @@
 /** One initial pass and three repeats per consecutive provider-failure episode. */
 export const MAX_CHAIN_REPEATS = 3;
 
+/** Physical models get three attempts in each of three groups. */
+export const PHYSICAL_ATTEMPTS_PER_GROUP = 3;
+export const PHYSICAL_GROUPS = 3;
+export const MAX_PHYSICAL_ATTEMPTS = PHYSICAL_ATTEMPTS_PER_GROUP * PHYSICAL_GROUPS;
+export const PHYSICAL_GROUP_WAIT_MS = 5 * 60_000;
+
 /**
  * State is plain JSON so Pi can persist it with the virtual route. A successful
  * assistant response closes the episode; tool execution is never replayed here.
@@ -64,4 +70,34 @@ export function waitForCooldown(ms, signal) {
     signal?.addEventListener("abort", finish, { once: true });
     if (signal?.aborted) finish();
   });
+}
+
+/** Plain state for recovery of one directly selected physical model. */
+export function newPhysicalRecovery() {
+  return {
+    version: 1,
+    attempts: 0,
+    failureKey: null,
+    error: "",
+    exhausted: false,
+    stopped: false,
+    markerAttempt: 0,
+  };
+}
+
+/** Count one physical failure, once per assistant message identity. */
+export function planPhysicalRecovery(state, error, failureKey) {
+  if (state.failureKey === failureKey || state.exhausted || state.stopped) return false;
+  state.failureKey = failureKey;
+  state.error = error;
+  state.attempts++;
+  if (state.attempts >= MAX_PHYSICAL_ATTEMPTS) state.exhausted = true;
+  return true;
+}
+
+/** The exact two five-minute gaps follow attempts 3 and 6. */
+export function physicalWaitMs(attempts) {
+  return attempts > 0 && attempts < MAX_PHYSICAL_ATTEMPTS && attempts % PHYSICAL_ATTEMPTS_PER_GROUP === 0
+    ? PHYSICAL_GROUP_WAIT_MS
+    : 0;
 }

@@ -334,18 +334,19 @@ for (const reason of ["direct", "continuation", "retry"]) {
   });
 }
 
-test("B4: a selected physical session is neither annotated nor taken over", t => {
+test("B4: a selected physical session gets extension-owned recovery without virtual rotation", async t => {
   const r = runtime(t, ["a", "b"]);
   r.ctx.model = { provider: "a", id: "model" };
   const message = {
     role: "assistant", provider: "a", model: "model", stopReason: "error",
     errorMessage: "upstream stream read failed before completion: http2: response body closed",
+    timestamp: 1,
   };
   const before = structuredClone(message);
   assert.deepEqual(r.fire("message_end", { message }), [undefined]);
   r.fire("agent_end", { messages: [message] });
   assert.deepEqual(message, before);
-  assert.equal(r.boundary(), undefined);
+  assert.equal(r.boundary()?.continue, true);
   assert.equal(r.logs.filter(l => /failure recorded/.test(l)).length, 0);
   assert.match(r.logs.join("\n"), /bypasses failover/);
 });
@@ -373,4 +374,24 @@ test("non-rotatable errors clear a previously planned takeover", async t => {
   r.fail("a");
   r.fire("message_end", { message: { role: "assistant", provider: "a", model: "model", stopReason: "error", errorMessage: "malformed json" } });
   assert.equal(r.boundary(), undefined);
+});
+
+test("a directly selected physical model gets three groups of three attempts", async t => {
+  const r = runtime(t, ["a", "b"]);
+  r.ctx.model = { provider: "physical", id: "model" };
+  const markers = [];
+  for (let attempt = 1; attempt <= 9; attempt++) {
+    r.fail("physical", "upstream stream read failed before completion: http2: response body closed");
+    const boundary = r.boundary();
+    if (attempt === 3 || attempt === 6) {
+      assert.equal(typeof boundary?.then, "function", `attempt ${attempt} waits before the next group`);
+      t.mock.timers.tick(5 * 60_000);
+      markers.push(await boundary);
+    } else {
+      markers.push(boundary);
+    }
+    assert.equal(markers.at(-1)?.continue, attempt < 9 ? true : undefined, `attempt ${attempt}`);
+  }
+  assert.equal(markers.filter(Boolean).length, 8);
+  assert.equal(r.boundary(), undefined, "the exhausted physical episode does not continue");
 });
