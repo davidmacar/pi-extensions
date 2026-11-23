@@ -21,6 +21,13 @@ export function formatCooldown(ms: number): string {
 	return minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 60)}h`;
 }
 
+/** Compact marketplace price, preserving the currency delivered by SubRouter. */
+export function formatPrice(price: ChannelsSidebarChannel["price"]): string {
+	if (!price || !Number.isFinite(price.input_price) || !price.price_currency) return "—";
+	const value = price.input_price < 0.01 ? price.input_price.toPrecision(2) : price.input_price.toFixed(2);
+	return `¥${value}/M in`;
+}
+
 const clean = (value: string) => sanitizeTerminalText(value).replace(/[\x00-\x1f\x7f]/g, "").trim();
 
 /** The one mark a channel row carries besides its speed. */
@@ -46,10 +53,11 @@ function stateMark(channel: ChannelsSidebarChannel, theme: ChannelsTheme): strin
  */
 export function channelsModelRows(model: ChannelsSidebarModel, theme: ChannelsTheme, width: number): string[] {
 	const name = clean(model.model);
+	const label = model.order === "speed" ? "RÁPIDO" : "BARATO";
 	const active = model.active ? clean(model.active) : "";
 	const head = renderPanelRow(
 		width,
-		theme.fg("text", name),
+		theme.fg("text", `${name} · ${label}`),
 		active ? theme.fg("muted", `→ ${active}`) : "",
 	);
 	const shown = model.channels.slice(0, CHANNELS_SHOWN);
@@ -60,9 +68,10 @@ export function channelsModelRows(model: ChannelsSidebarModel, theme: ChannelsTh
 		const label = theme.fg("muted", `${index + 1}`);
 		const channelName = theme.fg(channel.state === "active" ? "accent" : "text", clean(channel.channel).padEnd(column));
 		const speed = formatTokensPerSecond(channel.tokensPerSecond);
+		const metric = model.order === "cost" ? formatPrice(channel.price) : speed;
 		// The mark leads the right column: the state of a channel is what the
 		// reader looks for, and a right-aligned number alone hides it.
-		const right = [stateMark(channel, theme), speed ? theme.fg("muted", speed) : ""].filter(Boolean).join(" ");
+		const right = [stateMark(channel, theme), metric ? theme.fg("muted", metric) : ""].filter(Boolean).join(" ");
 		return renderPanelRow(width, `${label} ${channelName}`, right);
 	});
 	return [head, ...rows];

@@ -1,19 +1,28 @@
 # gentle-pi-channels patch
 
-Adds the **Channels** card to Gentle Shell: the channel a request would use for each
-physical model, the fastest three with the tokens per second of the last measurement, and one
-mark per channel — `●` in use, `⏱ 4m` cooling down, `✕` probe failed, `—` never measured.
+Adds the **Channels** card to Gentle Shell: separate **RÁPIDO** and **BARATO** sections for each
+virtual model, with the selected channel. Fast sections show the three fastest channels and their
+latest throughput; cheap sections show the three lowest current marketplace input prices. Each row
+also carries one mark — `●` in use, `⏱ 4m` cooling down, `✕` probe failed, `—` never measured.
 
 ```text
-▾ CHANNELS                                   2
-  deepseek-v4.1-flash-1017               → znu
+▾ CHANNELS                                   4
+  deepseek-v4.1-flash-1017 · RÁPIDO      → znu
   1 znu                            ● 7.1 tok/s
   2 stableai                         4.2 tok/s
   3 relai                       ⏱ 4m 3.7 tok/s
-  gpt-6.1-sol                           → best
+  deepseek-v4.1-flash-1017 · BARATO  → stableai
+  1 stableai                       ● ¥0.07/M in
+  2 znu                               ¥0.14/M in
+  3 relai                             ¥0.27/M in
+  gpt-6.2-sol · RÁPIDO                 → best
   1 best                           ● 1.2 tok/s
   2 fxpayback                                ✕
   3 000                                      —
+  gpt-6.2-sol · BARATO             → fxpayback
+  1 fxpayback                      ● ¥0.20/M in
+  2 best                             ¥0.34/M in
+  3 000                              ¥0.54/M in
 ```
 
 ## Why a patch and not an extension
@@ -32,15 +41,17 @@ event — the card is not wired to the router in particular.
 
 ## The contract
 
-`gentle-pi:channels-sidebar/v1`, payload:
+`gentle-pi:channels-sidebar/v2`, payload:
 
 ```json
 {
-  "schema": "gentle-pi.channels-sidebar/v1",
+  "schema": "gentle-pi.channels-sidebar/v2",
   "measuredAt": 1794938790229,
   "models": [
     {
       "model": "deepseek-v4.1-flash-1017",
+      "virtualId": "deepseek-rapido",
+      "order": "speed",
       "active": "znu",
       "total": 4,
       "hidden": 1,
@@ -52,7 +63,9 @@ event — the card is not wired to the router in particular.
 }
 ```
 
-`state` is one of `active`, `ready`, `cooldown`, `failed`, `unmeasured`; `cooldownMs` carries
+Each model entry is one virtual route and includes `virtualId` plus `order` (`speed` or `cost`).
+Cheap rows carry normalized CNY `price: { input_price, price_currency: "CNY" }`; the router refreshes those values
+dynamically and republishes the snapshot. The card labels them `¥…/M in` (input price per million tokens). `state` is one of `active`, `ready`, `cooldown`, `failed`, `unmeasured`; `cooldownMs` carries
 the remaining wait and `note` the reason behind a failure. At most three channels per model and
 sixteen models are painted; anything else is refused instead of painted. It is display data
 only: it grants no review, permission or delivery authority, and a malformed payload is ignored
@@ -93,7 +106,7 @@ bounded repair, not a reason to freeze the harness.
    panel surface** (`docs/extensions.md` "Widgets, Status, and Footer"; `docs/tui.md:9-16`) and no
    way for one extension to add a section to another's rendered output — the only cross-extension
    hooks are the event bus and renderer chains. So the card can only become upstream code: the
-   event contract here is already generic (`gentle-pi:channels-sidebar/v1`), which is what a PR to
+   event contract here is already generic (`gentle-pi:channels-sidebar/v2`), which is what a PR to
    `Gentleman-Programming/gentle-shell` would carry.
 
 `pi -e` is not a durability route: `docs/packages.md:31` caches and re-checks those packages.

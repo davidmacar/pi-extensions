@@ -39,17 +39,22 @@ selects the SubRouter upstream, the shared URL does not.
 
 - Old Sol entries were replaced in every provider that carried them; `subrouter-lingai` received the
   model without losing its DeepSeek entries. Unrelated providers were not touched.
-- `router/sol-barato` keeps `order: "cost"`. The router uses the configured order and does not query
-  prices. The order follows the supplied channel list; reorder the six steps once current prices are
-  known.
+- `router/sol-barato` keeps `order: "cost"`. On each active Pi session start, and hourly while the
+  session remains alive, the extension queries the public SubRouter marketplace endpoint for every
+  configured physical model/channel and caches the returned input price. SubRouter returns
+  provider-native currencies and does not provide a usable public currency-conversion parameter, so
+  USD values are normalized to CNY with the established 6.8 rate while CNY values remain unchanged.
+  The chain is ordered by lowest normalized CNY input price, with configured order preserved for
+  ties. The hourly timer is cleared on `session_shutdown`. Each marketplace request has a
+  10-second abortable timeout. No credentials or network calls are used by the offline tests.
 - `router/sol-rapido` keeps `order: "speed"` over the same channels. Old-model samples cannot measure
   the new model, so its first measurement uses the new references.
 - Context/output limits and thinking-level labels carry forward the previous Sol configuration. They
   are assumptions pending provider validation.
-- Every channel carries its own current marketplace rate, fetched 2026-11-22 and converted from CNY
-  at the platform's internal 6.8 rate. The generic `subrouter` entry uses the six-channel average.
-  Prices move: rerun the fetch when they change. Cost never affects routing, which uses the step
-  order only.
+- Marketplace prices are runtime data and may change. The cache is stored at the configured price
+  cache path (`~/.pi/agent/failover-router-price.json` by default); it retains the native input
+  price/currency from SubRouter, while readers normalize USD to CNY for ordering and display. It
+  never stores credentials.
 - Historical troubleshooting examples were version-normalized; they do not prove a live request
   succeeded. No transcripts, logs or measurement caches were erased.
 

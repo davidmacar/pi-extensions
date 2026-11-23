@@ -45,11 +45,13 @@ function hostRoot() {
 }
 
 const fixture = {
-	schema: "gentle-pi.channels-sidebar/v1",
+	schema: "gentle-pi.channels-sidebar/v2",
 	measuredAt: 1794937772447,
 	models: [
 		{
 			model: "deepseek-v4.1-flash-1017",
+			virtualId: "deepseek-rapido",
+			order: "speed",
 			active: "znu",
 			total: 4,
 			hidden: 1,
@@ -60,14 +62,42 @@ const fixture = {
 			],
 		},
 		{
-			model: "gpt-6.1-sol",
+			model: "gpt-6.2-sol",
+			virtualId: "sol-rapido",
+			order: "speed",
 			active: "best",
 			total: 4,
 			hidden: 1,
 			channels: [
-				{ ref: "subrouter-best/gpt-6.1-sol", channel: "best", state: "active", tokensPerSecond: 1.2, measuredAt: 1794937772447 },
-				{ ref: "subrouter-fxpayback/gpt-6.1-sol", channel: "fxpayback", state: "failed", tokensPerSecond: null, measuredAt: null, note: "probe timed out after 45000 ms" },
-				{ ref: "subrouter-000/gpt-6.1-sol", channel: "000", state: "unmeasured", tokensPerSecond: null, measuredAt: null },
+				{ ref: "subrouter-best/gpt-6.2-sol", channel: "best", state: "active", tokensPerSecond: 1.2, measuredAt: 1794937772447 },
+				{ ref: "subrouter-fxpayback/gpt-6.2-sol", channel: "fxpayback", state: "failed", tokensPerSecond: null, measuredAt: null, note: "probe timed out after 45000 ms" },
+				{ ref: "subrouter-000/gpt-6.2-sol", channel: "000", state: "unmeasured", tokensPerSecond: null, measuredAt: null },
+			],
+		},
+		{
+			model: "gpt-6.2-sol",
+			virtualId: "sol-barato",
+			order: "cost",
+			active: "fxpayback",
+			total: 4,
+			hidden: 1,
+			channels: [
+				{ ref: "subrouter-fxpayback/gpt-6.2-sol", channel: "fxpayback", state: "active", tokensPerSecond: null, measuredAt: null, price: { input_price: 0.204, price_currency: "CNY" } },
+				{ ref: "subrouter-best/gpt-6.2-sol", channel: "best", state: "unmeasured", tokensPerSecond: null, measuredAt: null, price: { input_price: 0.34, price_currency: "CNY" } },
+				{ ref: "subrouter-000/gpt-6.2-sol", channel: "000", state: "unmeasured", tokensPerSecond: null, measuredAt: null, price: { input_price: 0.544, price_currency: "CNY" } },
+			],
+		},
+		{
+			model: "deepseek-v4.1-flash-1017",
+			virtualId: "deepseek-barato",
+			order: "cost",
+			active: "stableai",
+			total: 4,
+			hidden: 1,
+			channels: [
+				{ ref: "subrouter-stableai/deepseek-v4.1-flash-1017", channel: "stableai", state: "active", tokensPerSecond: null, measuredAt: null, price: { input_price: 0.068, price_currency: "CNY" } },
+				{ ref: "subrouter-znu/deepseek-v4.1-flash-1017", channel: "znu", state: "unmeasured", tokensPerSecond: null, measuredAt: null, price: { input_price: 0.136, price_currency: "CNY" } },
+				{ ref: "subrouter-relai/deepseek-v4.1-flash-1017", channel: "relai", state: "unmeasured", tokensPerSecond: null, measuredAt: null, price: { input_price: 0.272, price_currency: "CNY" } },
 			],
 		},
 	],
@@ -127,10 +157,12 @@ try {
 		if (!condition) failures.push(message);
 	};
 	expect(painted.includes("CHANNELS"), "the Channels header is missing");
-	expect(/\b2\s*$/.test(painted.split("\n").find((line) => line.includes("CHANNELS")) ?? ""), "the header does not count the two models");
+	expect(/\b4\s*$/.test(painted.split("\n").find((line) => line.includes("CHANNELS")) ?? ""), "the header does not count the four virtual sections");
 	expect(painted.includes("deepseek-v4.1-flash-1017"), "the model name is missing");
 	expect(painted.includes("→ znu"), "the chosen channel is missing");
 	expect(painted.includes("7.1 tok/s"), "the measured speed is missing");
+	expect(painted.includes("RÁPIDO") && painted.includes("BARATO"), "the fast and cheap labels are missing");
+	expect(painted.includes("¥0.20/M in") && painted.includes("¥0.07/M in"), "the normalized CNY input prices are missing");
 	expect(painted.includes("⏱ 4m"), "the cooldown mark is missing");
 	expect(painted.includes("✕"), "the failed-probe mark is missing");
 	expect(painted.includes("—"), "the unmeasured mark is missing");

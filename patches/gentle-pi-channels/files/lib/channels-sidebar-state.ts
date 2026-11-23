@@ -6,13 +6,18 @@
 // review or delivery authority, and an extension that never publishes simply
 // gets no Channels section.
 
-export const CHANNELS_SIDEBAR_EVENT = "gentle-pi:channels-sidebar/v1";
-export const CHANNELS_SNAPSHOT_SCHEMA = "gentle-pi.channels-sidebar/v1";
+export const CHANNELS_SIDEBAR_EVENT = "gentle-pi:channels-sidebar/v2";
+export const CHANNELS_SNAPSHOT_SCHEMA = "gentle-pi.channels-sidebar/v2";
 
 /** The fastest channels a model shows: the card is a rail section, not a table. */
 export const CHANNELS_SHOWN = 3;
 
 export type ChannelState = "active" | "ready" | "cooldown" | "failed" | "unmeasured";
+
+export interface ChannelsSidebarPrice {
+	input_price: number;
+	price_currency: string;
+}
 
 export interface ChannelsSidebarChannel {
 	/** `provider/id` of the physical channel, kept for correlation. */
@@ -26,11 +31,17 @@ export interface ChannelsSidebarChannel {
 	cooldownMs?: number;
 	/** The provider or timeout text behind a `failed` state. */
 	note?: string;
+	/** Current marketplace input price, present for cheap virtual models. */
+	price?: ChannelsSidebarPrice | null;
 }
 
 export interface ChannelsSidebarModel {
 	/** The physical model the channels serve. */
 	model: string;
+	/** Virtual model shown as a distinct fast or cheap section. */
+	virtualId: string;
+	/** Routing order represented by this section. */
+	order: "speed" | "cost";
 	/** The channel a request would use right now, when one is known. */
 	active: string | null;
 	total: number;
@@ -66,12 +77,19 @@ function isChannel(value: unknown): value is ChannelsSidebarChannel {
 		&& (channel.tokensPerSecond === null || finite(channel.tokensPerSecond) !== undefined)
 		&& (channel.measuredAt === null || finite(channel.measuredAt) !== undefined)
 		&& (channel.cooldownMs === undefined || finite(channel.cooldownMs) !== undefined)
-		&& (channel.note === undefined || text(channel.note, 200) !== undefined);
+		&& (channel.note === undefined || text(channel.note, 200) !== undefined)
+		&& (channel.price === undefined || channel.price === null || (
+			record(channel.price).input_price !== undefined
+			&& finite(record(channel.price).input_price) !== undefined
+			&& text(record(channel.price).price_currency, 20) !== undefined
+		));
 }
 
 function isModel(value: unknown): value is ChannelsSidebarModel {
 	const model = record(value);
 	return text(model.model, 120) !== undefined
+		&& text(model.virtualId, 80) !== undefined
+		&& (model.order === "speed" || model.order === "cost")
 		&& (model.active === null || text(model.active, 40) !== undefined)
 		&& Number.isInteger(model.total)
 		&& (model.total as number) >= 0

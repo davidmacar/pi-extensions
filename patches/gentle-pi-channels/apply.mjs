@@ -92,8 +92,7 @@ const EDITS = [
 		marker: 'key: "channels"',
 		find: "\t// The status bar shows the permission mode once; Integrations only says",
 		replace: [
-			"\t// Channels: what the failover router measured for each physical model, so the",
-			"\t// rail answers \"which channel would answer now, and how fast\" without a probe.",
+			"\t// Channels: one section per virtual route; fast sections show throughput and cheap sections show current prices.",
 			"\tif (model.channels && model.channels.models.length > 0) {",
 			"\t\tsections.push({ key: \"channels\", header: header(\"channels\", \"Channels\", channelsSectionCount(model.channels)), rows: renderChannelsRows(model.channels, theme, width) });",
 			"\t}",
@@ -196,7 +195,7 @@ const EDITS = [
 		marker: "**Channels** appears when a channel publisher registers",
 		find: "Integrations lists other extensions' statuses and says what the permission mode means without repeating it.",
 		replace: [
-			"**Channels** appears when a channel publisher registers (the failover router does): per physical model the channel a request would use and the fastest three with the tokens per second of the last measurement, a cooldown taking the place of the speed while a channel rests, and one mark per row — `●` in use, `⏱ 4m` cooling down, `✕` where the probe failed, `—` never measured. It disappears until a publisher sends its first snapshot.",
+			"**Channels** appears when a channel publisher registers (the failover router does): one section per virtual route, with `RÁPIDO` sections showing the selected channel and three fastest channels with throughput, and `BARATO` sections showing the selected channel and three lowest current prices. It disappears until a publisher sends its first snapshot.",
 			"Integrations lists other extensions' statuses and says what the permission mode means without repeating it.",
 		].join("\n"),
 		what: "describe the Channels card in the Rail section",
@@ -206,7 +205,7 @@ const EDITS = [
 		marker: "- Extensions can publish channel measurements",
 		find: "- The bar names the subscription it shows",
 		replace: [
-			"- Extensions can publish channel measurements for the rail's Channels card: emit `gentle-pi:channels-sidebar/v1` on `pi.events` with `{ schema: \"gentle-pi.channels-sidebar/v1\", measuredAt, models: [{ model, active, total, hidden, channels: [{ ref, channel, state, tokensPerSecond, measuredAt, cooldownMs?, note? }] }] }`. `state` is one of `active`, `ready`, `cooldown`, `failed`, `unmeasured`; at most three channels per model and sixteen models are painted. A malformed payload is ignored rather than crashing the shell, and the last valid snapshot stays until a new one replaces it. That is display data only: it grants no review, permission or delivery authority.",
+			"- Extensions can publish channel measurements for the rail's Channels card: emit `gentle-pi:channels-sidebar/v2` on `pi.events` with `{ schema: \"gentle-pi.channels-sidebar/v2\", measuredAt, models: [{ model, virtualId, order, active, total, hidden, channels: [{ ref, channel, state, tokensPerSecond, measuredAt, price?, cooldownMs?, note? }] }] }`. `order` is `speed` or `cost`; cheap rows may carry `{ input_price, price_currency }`. `state` is one of `active`, `ready`, `cooldown`, `failed`, `unmeasured`; at most three channels per section and sixteen sections are painted. A malformed payload is ignored rather than crashing the shell, and the last valid snapshot stays until a new one replaces it. That is display data only: it grants no review, permission or delivery authority.",
 			"- The bar names the subscription it shows",
 		].join("\n"),
 		what: "document the event contract",

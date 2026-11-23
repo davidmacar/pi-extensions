@@ -126,7 +126,7 @@ the cheap list until a probe says otherwise.
   consecutive sessions pays for one measurement, not one per session.
 - While a session stays active the measurement is refreshed every 15 minutes. When the session
   ends the timer is cleared, so an idle install never probes.
-- Each channel is probed sequentially with a 100 token reply. Timeouts scale per channel: the first
+- Each channel is probed sequentially with a 50 token reply. Timeouts scale per channel: the first
   attempt uses the **15 s** tier, a channel that stays silent moves to the **45 s** tier, and
   the tier that worked is remembered so a slow reasoning model stops paying for the short attempt
   on every run. The **newest sample decides the order**, so a channel that starts to degrade loses
@@ -139,8 +139,10 @@ the cheap list until a probe says otherwise.
   the next tier; one that answers with an error has already said what is wrong, so it is recorded
   with that reason and not asked again. Retrying a hard `400` on a wider tier only spent a second
   request and hid the real error behind a timeout message.
-- **Failures are remembered.** A channel that cannot be measured is stored with its reason and
-  retried on the next measurement session. Without this, a channel that always times out looks
+- **Failures are remembered, but prior speed is invalidated.** A channel that cannot be measured is
+  stored with its reason, its old throughput is cleared so it is unranked and placed at the end of
+  the configured chain, and it is retried on the next measurement session. Without this, a channel
+  that always times out looks
   exactly like one that was never measured — which is how an entire family silently went unmeasured.
 - **Every attempt keeps its message.** Each channel stores the last 5 attempts, each with the time,
   whether it succeeded, and the text that explains it: the throughput and tier for a success, the
@@ -156,11 +158,14 @@ the cheap list until a probe says otherwise.
 ### The Channels card in Gentle Shell
 
 The same measurements feed the rail's **Channels** card. This extension publishes one read-only
-snapshot on `pi.events`, `gentle-pi:channels-sidebar/v1`, at session start, after every
-measurement session settles, after the first request of a session, and after every rotation that
-starts a cooldown. Per physical model it carries the channel a request would use and the three
-fastest, each with the newest tokens per second and its state — `active`, `ready`, `cooldown`,
-`failed` or `unmeasured`.
+snapshot on `pi.events`, `gentle-pi:channels-sidebar/v2`, at session start, after every
+measurement session settles, after the first request of a session, after every rotation that
+starts a cooldown, and after each marketplace price refresh. It carries one section per virtual
+model: `speed` sections show the selected channel and the three fastest channels with their newest
+throughput; `cost` sections show the selected channel and the three cheapest channels with their
+current input price normalized to CNY. The card labels these values `¥…/M in` (input price per
+million tokens). Prices are refreshed dynamically by the extension; native USD marketplace values
+are converted with SubRouter's established 6.8 USD→CNY rate.
 
 The card itself is a Gentle Shell section: Gentle Shell has no extension seam for a card, so it
 needs the patch in [`../patches/gentle-pi-channels`](../patches/gentle-pi-channels). Without it

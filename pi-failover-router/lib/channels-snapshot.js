@@ -11,16 +11,17 @@
 
 import { orderBySpeed } from "./speed-order.js";
 import { tokensPerSecond } from "./speed-cache.js";
+import { orderByPrice, priceFor } from "./price-cache.js";
 
 /** The shape a consumer validates before painting it. */
-export const CHANNELS_SNAPSHOT_SCHEMA = "gentle-pi.channels-sidebar/v1";
+export const CHANNELS_SNAPSHOT_SCHEMA = "gentle-pi.channels-sidebar/v2";
 /**
  * Event channel Gentle Shell listens on. The consumer lives in the installed
  * gentle-ai package; this module only names the contract.
  */
-export const CHANNELS_SNAPSHOT_EVENT = "gentle-pi:channels-sidebar/v1";
+export const CHANNELS_SNAPSHOT_EVENT = "gentle-pi:channels-sidebar/v2";
 
-/** Shared contract limit: the card shows the fastest three channels of each model. */
+/** Shared contract limit: each card section shows three channels. */
 export const CHANNELS_SHOWN = 3;
 
 const providerOf = (ref) => ref.slice(0, Math.max(0, ref.indexOf("/")));
@@ -42,13 +43,14 @@ function lastAttempt(entry) {
 }
 
 /**
- * One model family, its channels ranked fastest first, and which one is chosen.
- * A family appears once however many virtual models share it: `sol-barato` and
- * `sol-rapido` are the same two channels in a different order.
+ * One virtual model section, its channels ranked by the route's order, and
+ * which channel is chosen. Fast and cheap virtuals are intentionally separate.
  */
-function describeModel({ model, refs, speedCache, cooldowns, now, activeRef, top }) {
+function describeModel({ model, virtualId, order, refs, speedCache, priceCache, cooldowns, now, activeRef, top, speedOf, rank }) {
   const steps = refs.map((ref) => ({ model: ref }));
-  const ranked = orderBySpeed(steps, speedCache, tokensPerSecond).map((step) => step.model);
+  const ranked = order === "speed"
+    ? rank(steps, speedCache, speedOf).map((step) => step.model)
+    : orderByPrice(steps, priceCache).map((step) => step.model);
   const described = ranked.map((ref) => {
     const entry = speedCache?.channels?.[ref];
     const speed = tokensPerSecond(speedCache, ref);
@@ -70,6 +72,7 @@ function describeModel({ model, refs, speedCache, cooldowns, now, activeRef, top
       state,
       tokensPerSecond: typeof speed === "number" ? speed : null,
       measuredAt: typeof entry?.measuredAt === "number" ? entry.measuredAt : null,
+      ...(order === "cost" ? { price: priceFor(priceCache, ref) ?? null } : {}),
       ...(cooling ? { cooldownMs: until - now } : {}),
       ...(state === "failed" && typeof attempt?.message === "string" ? { note: attempt.message } : {}),
     };
@@ -81,9 +84,18 @@ function describeModel({ model, refs, speedCache, cooldowns, now, activeRef, top
   const routed = described.find((channel) => channel.ref === activeRef && usable(channel));
   const chosen = routed ?? described.find(usable) ?? described[0];
   if (chosen && usable(chosen)) chosen.state = "active";
+  // Keep failed probes visible in the card even though speed routing places them
+  // last; otherwise the fastest-three slice can hide the diagnostic state.
   const shown = described.slice(0, top);
+  for (const failed of described.filter((channel) => channel.state === "failed")) {
+    if (shown.includes(failed)) continue;
+    if (shown.length < top) shown.push(failed);
+    else if (top > 0) shown[shown.length - 1] = failed;
+  }
   return {
     model,
+    virtualId,
+    order,
     active: chosen ? chosen.channel : null,
     total: described.length,
     hidden: Math.max(0, described.length - shown.length),
@@ -97,6 +109,7 @@ function describeModel({ model, refs, speedCache, cooldowns, now, activeRef, top
  * @param {object} input
  * @param {Array<{provider: string, id: string, chain: Array<{model: string}>}>} input.virtuals
  * @param {object} input.speedCache
+ * @param {object} input.priceCache
  * @param {Map<string, number>} input.cooldowns channel ref -> epoch ms it becomes usable
  * @param {Map<string, string>} input.lastRouted virtual key -> channel ref routed last
  * @param {number} input.now
@@ -107,6 +120,7 @@ function describeModel({ model, refs, speedCache, cooldowns, now, activeRef, top
 export function buildChannelsSnapshot({
   virtuals,
   speedCache,
+  priceCache,
   cooldowns = new Map(),
   lastRouted = new Map(),
   now,
@@ -119,29 +133,34 @@ export function buildChannelsSnapshot({
   const families = new Map();
   for (const def of virtuals) {
     const key = `${def.provider}/${def.id}`;
+    const grouped = new Map();
     for (const step of def.chain) {
       const model = modelOf(step.model);
-      const family = families.get(model) ?? { model, refs: [], virtualKeys: [] };
-      if (!family.virtualKeys.includes(key)) family.virtualKeys.push(key);
+      const family = grouped.get(model) ?? { model, virtualId: def.id, virtualKey: key, order: def.order === "speed" ? "speed" : "cost", refs: [] };
       if (!family.refs.includes(step.model)) family.refs.push(step.model);
-      families.set(model, family);
+      grouped.set(model, family);
     }
+    for (const [model, family] of grouped) families.set(`${key}:${model}`, family);
   }
 
-  const channels = speedCache?.channels ?? {};
   const models = [];
   for (const family of families.values()) {
     // Only a real route is handed over; which channel falls back to being
     // chosen depends on cooldowns, and that decision belongs to describeModel.
-    const routed = family.virtualKeys.map((key) => lastRouted.get(key)).find((ref) => typeof ref === "string");
+    const routed = lastRouted.get(family.virtualKey);
     const activeRef = routed && family.refs.includes(routed) ? routed : undefined;
     models.push(
       describeModel({
         model: family.model,
+        virtualId: family.virtualId,
+        order: family.order,
         refs: family.refs,
         speedCache,
+        priceCache,
         cooldowns,
         now,
+        speedOf,
+        rank,
         activeRef,
         top,
       }),
@@ -167,6 +186,7 @@ export function isChannelsSnapshot(value) {
   return value.models.every((model) => {
     if (!model || typeof model !== "object") return false;
     if (typeof model.model !== "string" || model.model.length === 0) return false;
+    if (typeof model.virtualId !== "string" || !["speed", "cost"].includes(model.order)) return false;
     if (!Array.isArray(model.channels) || model.channels.length === 0 || model.channels.length > CHANNELS_SHOWN) return false;
     return model.channels.every(
       (channel) =>
@@ -175,6 +195,8 @@ export function isChannelsSnapshot(value) {
         typeof channel.channel === "string" &&
         channel.channel.length > 0 &&
         (channel.tokensPerSecond === null || typeof channel.tokensPerSecond === "number") &&
+        (channel.price === undefined || channel.price === null ||
+          (typeof channel.price.input_price === "number" && typeof channel.price.price_currency === "string")) &&
         ["active", "ready", "cooldown", "failed", "unmeasured"].includes(channel.state),
     );
   });
