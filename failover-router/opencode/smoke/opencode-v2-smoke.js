@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { accessSync, constants, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { startGateway } from "../src/server.js";
 
 // Opt-in Linux smoke; requires Bubblewrap with network namespaces. Never fall
@@ -170,24 +170,42 @@ async function smoke(t, protocol, scratch, status524 = false) {
       stream(response, body.model);
     }
   }));
-  const gateway = await startGateway({ config: {
+  const gatewayConfig = {
     apiKeyEnv: "LOCAL", attemptTimeoutMs: 3000,
     channels: { primary: { baseURL: primary.url, apiKeyEnv: "primary" }, backup: { baseURL: backup.url, apiKeyEnv: "backup" } },
     profiles: { [model]: { protocol, chain: ["primary", "backup"].map(channel => ({ channel, model: `upstream-${channel}` })) } },
-  }, env: keys, port: 0, stateDir: join(project, "gateway-state") });
-  t.after(() => gateway.close());
+  };
+  const stateDir = join(project, "gateway-state");
+  const packaged = process.argv[3] === "--packaged";
+  let gateway, pluginEnv, plugins;
+  if (packaged) {
+    const socket = createServer();
+    await new Promise((done, fail) => socket.once("error", fail).listen(0, "127.0.0.1", done));
+    const port = socket.address().port;
+    await new Promise((done, fail) => socket.close(error => error ? fail(error) : done()));
+    const gatewayPath = join(project, "gateway.json");
+    writeFileSync(gatewayPath, JSON.stringify({ ...gatewayConfig, listen: { port } }));
+    pluginEnv = { ...keys, FAILOVER_ROUTER_CONFIG: gatewayPath, FAILOVER_ROUTER_STATE_DIR: stateDir };
+    plugins = [pathToFileURL("/packed-plugin").href];
+    gateway = { url: `http://127.0.0.1:${port}` };
+  } else {
+    gateway = await startGateway({ config: gatewayConfig, env: keys, port: 0, stateDir });
+    t.after(() => gateway.close());
+  }
   const config = {
+    ...(plugins ? { plugins } : {}),
     update: "disable",
     permissions: [{ action: "*", resource: "*", effect: "deny" }, { action: "read", resource: "*", effect: "allow" }],
     providers: { smoke: { name: "Smoke gateway", package: sdkPackage, settings: { baseURL: `${gateway.url}/v1`, apiKey: keys.LOCAL, ...(chat ? {} : { store: false }) },
       models: { [model]: { name: model, capabilities: { tools: true }, limit: { context: 8192, output: 1024 } } } } },
   };
-  const result = await command("/opencode", ["run", "--standalone", "--format", "json", "--model", `smoke/${model}`, "--title", "Failover smoke",
-    "Read fixture.txt exactly once and report what happened."], { cwd: project, env: openCodeEnv(project, config), timeout: 8000 });
+  const result = await command("/opencode", ["run", "--standalone", ...(packaged ? ["--print-logs", "--log-level", "warn"] : []), "--format", "json", "--model", `smoke/${model}`, "--title", "Failover smoke",
+    "Read fixture.txt exactly once and report what happened."], { cwd: project, env: { ...openCodeEnv(project, config), ...pluginEnv }, timeout: 8000 });
   t.diagnostic(JSON.stringify({ protocol, sdkPackage, attempts, ...result }));
   const mockErrors = [...primary.errors, ...backup.errors];
   assert.deepEqual(mockErrors.map(error => error.message), [], `${protocol} mock assertions`);
   assert.equal(result.exitCode, 0);
+  if (packaged) await assert.rejects(fetch(`${gateway.url}/health`));
   assert.deepEqual(attempts, ["primary", "backup", "backup"]);
   const events = result.stdout.trim().split("\n").map(line => JSON.parse(line));
   assert.equal(events.filter(event => event.type === "error").length, 0);
@@ -228,11 +246,15 @@ if (process.argv[2] === "--worker") {
     mkdirSync(scratchBase, { recursive: true, mode: 0o700 });
     const scratch = mkdtempSync(join(scratchBase, "run-"));
     t.after(() => rmSync(scratch, { recursive: true, force: true }));
+    const archive = process.env.OPENCODE_PLUGIN_TARBALL;
+    if (archive) execFileSync("tar", ["-xzf", resolve(archive), "-C", scratch]);
     const result = await command("/usr/bin/bwrap", ["--die-with-parent", "--unshare-net", "--unshare-pid", "--unshare-ipc",
       "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
       "--proc", "/proc", "--dev", "/dev", "--ro-bind", router, "/router", "--ro-bind", binary, "/opencode",
-      "--bind", scratch, "/tmp", "--chdir", "/tmp", "--setenv", "HOME", "/tmp", process.execPath,
-      "/router/opencode/smoke/opencode-v2-smoke.js", "--worker"], { timeout: 23_000 });
+      "--ro-bind", process.execPath, "/node", "--bind", scratch, "/tmp",
+      ...(archive ? ["--ro-bind", join(scratch, "package"), "/packed-plugin"] : []),
+      "--chdir", "/tmp", "--setenv", "HOME", "/tmp", "/node",
+      "/router/opencode/smoke/opencode-v2-smoke.js", "--worker", ...(archive ? ["--packaged"] : [])], { timeout: 30_000 });
     t.diagnostic(result.stdout.trimEnd());
     if (result.stderr) t.diagnostic(result.stderr.trimEnd());
     assert.equal(result.exitCode, 0, `sandbox failed (signal: ${result.signal ?? "none"})`);

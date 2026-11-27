@@ -1,0 +1,23 @@
+{
+  "name": "opencode-failover-router",
+  "version": "0.1.0",
+  "description": "OpenCode v2 server plugin for the ai-extensions failover gateway",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "dist/",
+    "examples/"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "npm run build",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  }
+}
