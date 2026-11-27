@@ -14,6 +14,16 @@ const PATHS = new Set(["/v1/chat/completions", "/v1/responses"]);
 const hash = value => createHash("sha256").update(value).digest();
 const abortableSleep = (ms, signal) => delay(ms, undefined, { signal });
 
+function gatewayVerdict({ status, detail }) {
+  const verdict = classifyFailure(detail);
+  if (verdict.kind !== "unknown" && verdict.kind !== "empty") return verdict;
+  if (/\bresponses stream ended before (?:\*\*\*\.completed|response\.completed|a terminal response event)\b/i.test(detail ?? "")) {
+    return classifyFailure("incomplete_stream");
+  }
+  // A CDN may return a bare 524 without the provider's terminal-stream message.
+  return status === 524 ? classifyFailure("upstream timeout") : verdict;
+}
+
 export const channelRef = step => `${step.channel}/${step.model}`;
 export function candidateOrder(profile, _channels, { speedCache, priceCache } = {}) {
   const refs = profile.chain.map(step => ({ ...step, upstreamModel: step.model, model: channelRef(step) }));
@@ -127,7 +137,7 @@ export async function routeGatewayRequest({ request, response, config, signal, f
       record(undefined, { kind: "unknown" }, signal?.aborted);
       throw error;
     }
-    const verdict = result.ok || signal?.aborted ? undefined : classifyFailure(result.detail);
+    const verdict = result.ok || signal?.aborted ? undefined : gatewayVerdict(result);
     record(result, verdict, signal?.aborted);
     signal?.throwIfAborted();
     if (result.ok) {

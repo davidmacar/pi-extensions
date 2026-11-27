@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { accessSync, constants, mkdtempSync, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import { delimiter, join, resolve } from "node:path";
@@ -78,6 +78,7 @@ function chatStream(response, model, toolArgs) {
   sendSse(response, [
     { ...header, choices: [{ index: 0, delta: { role: "assistant", ...delta }, finish_reason: null }] },
     { ...header, choices: [{ index: 0, delta: {}, finish_reason: toolArgs ? "tool_calls" : "stop" }] },
+    { ...header, choices: [], usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } },
   ], "data: [DONE]\n\n");
 }
 
@@ -106,10 +107,10 @@ function openCodeEnv(project, config) {
     OPENCODE_CONFIG_CONTENT: JSON.stringify(config) };
 }
 
-async function smoke(t, protocol, scratch) {
+async function smoke(t, protocol, scratch, status524 = false) {
   const chat = protocol === "chat/completions";
   const sdkPackage = chat ? packageBase : `${packageBase}/responses`;
-  const model = chat ? "chat-local" : "responses-local";
+  const model = chat ? "chat-local" : status524 ? "responses-524-local" : "responses-local";
   const project = join(scratch, model);
   mkdirSync(project);
   const filePath = join(project, "fixture.txt");
@@ -121,6 +122,7 @@ async function smoke(t, protocol, scratch) {
     assert.equal(request.headers.authorization, `Bearer ${keys[channel]}`);
     assert.equal(body.model, `upstream-${channel}`);
     assert.equal(body.stream, true);
+    if (chat) assert.equal(body.stream_options?.include_usage, true);
     if (!chat) {
       assert.equal(body.store, false);
       assert.equal(body.previous_response_id, undefined);
@@ -133,6 +135,11 @@ async function smoke(t, protocol, scratch) {
     if (chat) {
       response.writeHead(429, { "content-type": "application/json" });
       response.end('{"error":{"message":"smoke rate limit","type":"rate_limit_error"}}');
+      return;
+    }
+    if (status524) {
+      response.writeHead(524, { "content-type": "application/json" });
+      response.end('{"error":{"message":"responses stream ended before ***.completed"}}');
       return;
     }
     // A completed tool item is not a completed generation. A truncated
@@ -167,7 +174,7 @@ async function smoke(t, protocol, scratch) {
     apiKeyEnv: "LOCAL", attemptTimeoutMs: 3000,
     channels: { primary: { baseURL: primary.url, apiKeyEnv: "primary" }, backup: { baseURL: backup.url, apiKeyEnv: "backup" } },
     profiles: { [model]: { protocol, chain: ["primary", "backup"].map(channel => ({ channel, model: `upstream-${channel}` })) } },
-  }, env: keys, port: 0 });
+  }, env: keys, port: 0, stateDir: join(project, "gateway-state") });
   t.after(() => gateway.close());
   const config = {
     update: "disable",
@@ -190,6 +197,17 @@ async function smoke(t, protocol, scratch) {
   assert.equal(tools[0].part.state.status, "completed");
   assert.ok(JSON.stringify(tools[0].part.state.output).includes(fixture));
   assert.equal(events.filter(event => event.type === "text").map(event => event.part.text).join(""), finalText);
+  const ledger = readFileSync(join(project, "gateway-state", "cost-ledger.ndjson"), "utf8");
+  const rows = ledger.trimEnd().split("\n").map(JSON.parse);
+  assert.deepEqual(rows.map(row => [row.attempt, row.channel, row.outcome, row.failureKind, row.usage.inputTokens, row.usage.outputTokens, row.cost.amount]), [
+    [1, "primary", "failed", chat ? "rate_limit" : "incomplete_stream", null, null, null],
+    [2, "backup", "succeeded", null, 12, 4, null],
+    [1, "backup", "succeeded", null, 12, 4, null],
+  ]);
+  assert.deepEqual(rows.map(row => row.cost.reason), ["usage_missing", "tariff_missing", "tariff_missing"]);
+  assert.equal(rows[0].requestId, rows[1].requestId);
+  assert.notEqual(rows[1].requestId, rows[2].requestId);
+  assert.ok(![fixture, finalText, ...Object.values(keys)].some(value => ledger.includes(value)));
 }
 
 if (process.argv[2] === "--worker") {
@@ -201,7 +219,8 @@ if (process.argv[2] === "--worker") {
     assert.equal(version.exitCode, 0);
     assert.equal(version.stdout.trim(), "opencode v2.0.32");
     await t.test("Chat", child => smoke(child, "chat/completions", scratch));
-    await t.test("Responses", child => smoke(child, "responses", scratch));
+    await t.test("Responses: truncated stream", child => smoke(child, "responses", scratch));
+    await t.test("Responses: historical HTTP 524", child => smoke(child, "responses", scratch, true));
   });
 } else {
   test("native OpenCode Chat and Responses smoke (isolated)", async t => {
