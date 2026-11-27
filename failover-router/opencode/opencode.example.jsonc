@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "failover-chat/chat-cheap",
+  "providers": {
+    "failover-chat": {
+      "name": "Failover Chat",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:43128/v1", "apiKey": "{env:FAILOVER_ROUTER_KEY}", "encoding": "none", "headerTimeout": false, "chunkTimeout": false },
+      "models": {
+        "chat-cheap": { "name": "Chat / least cost", "capabilities": { "tools": true } },
+        "chat-physical": { "name": "Chat / fixed upstream", "capabilities": { "tools": true } }
+      }
+    },
+    "failover-responses": {
+      "name": "Failover Responses",
+      "package": "@opencode/ai/providers/openai-compatible/responses",
+      "settings": { "baseURL": "http://127.0.0.1:43128/v1", "apiKey": "{env:FAILOVER_ROUTER_KEY}", "encoding": "none", "headerTimeout": false, "chunkTimeout": false, "store": false },
+      "models": {
+        "responses-fast": { "name": "Responses / fastest", "capabilities": { "tools": true } }
+      }
+    }
+  }
+}

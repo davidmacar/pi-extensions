@@ -3,13 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Pi extension: virtual models that fail over across channels when a provider error is channel-owned rather than request-shaped.",
+  "description": "Cross-channel failover for Pi and OpenCode.",
   "license": "MIT",
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "node --test \"pi/test/**/*.test.js\"",
-    "check": "node --test \"pi/test/**/*.test.js\""
+    "test": "node --test \"pi/test/**/*.test.js\" \"opencode/test/**/*.test.js\"",
+    "check": "npm test",
+    "gateway": "node opencode/src/server.js",
+    "test:opencode:smoke": "node --test \"opencode/smoke/*.js\""
   }
 }

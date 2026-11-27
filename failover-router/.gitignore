@@ -1,2 +1,4 @@
 node_modules/
 *.log
+/opencode/gateway.local.json
+/opencode/.state/

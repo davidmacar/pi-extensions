@@ -1,0 +1,70 @@
+{
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 43128
+  },
+  "apiKeyEnv": "FAILOVER_ROUTER_KEY",
+  "refreshMarketplace": false,
+  "probeSpeed": false,
+  "channels": {
+    "subrouter-primary": {
+      "baseURL": "https://primary.example/v1",
+      "apiKeyEnv": "FAILOVER_PRIMARY_KEY"
+    },
+    "subrouter-backup": {
+      "baseURL": "https://backup.example/v1",
+      "apiKeyEnv": "FAILOVER_BACKUP_KEY"
+    }
+  },
+  "profiles": {
+    "chat-cheap": {
+      "protocol": "chat/completions",
+      "order": "cost",
+      "chain": [
+        {
+          "channel": "subrouter-primary",
+          "model": "chat-model",
+          "reasoningLevels": []
+        },
+        {
+          "channel": "subrouter-backup",
+          "model": "chat-model",
+          "reasoningLevels": []
+        }
+      ]
+    },
+    "responses-fast": {
+      "protocol": "responses",
+      "order": "speed",
+      "chain": [
+        {
+          "channel": "subrouter-primary",
+          "model": "reasoning-model",
+          "reasoningLevels": [
+            "low",
+            "high"
+          ]
+        },
+        {
+          "channel": "subrouter-backup",
+          "model": "reasoning-model",
+          "reasoningLevels": [
+            "low",
+            "high"
+          ]
+        }
+      ]
+    },
+    "chat-physical": {
+      "protocol": "chat/completions",
+      "recovery": "physical",
+      "chain": [
+        {
+          "channel": "subrouter-primary",
+          "model": "chat-model",
+          "reasoningLevels": []
+        }
+      ]
+    }
+  }
+}
