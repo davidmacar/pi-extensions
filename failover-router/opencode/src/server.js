@@ -1,13 +1,17 @@
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeGatewayConfig } from "./config.js";
+import { createMetrics } from "./metrics.js";
 import { routeGatewayRequest } from "./route.js";
 
 export async function startGateway({ config, env = process.env, fetchImpl = fetch, now = Date.now, sleep,
-  prepare, getMetrics, log = () => {}, port } = {}) {
+  stateDir = env.FAILOVER_ROUTER_STATE_DIR ?? resolve(env.XDG_STATE_HOME || resolve(homedir(), ".local/state"), "ai-extensions", "failover-router"),
+  log = () => {}, port } = {}) {
   config = normalizeGatewayConfig(config, { env });
+  const metrics = config.probeSpeed || config.refreshMarketplace ? createMetrics({ config, stateDir, fetchImpl, now, log }) : undefined;
   const channelsState = new Map();
   const active = new Set();
   let closing = false;
@@ -25,7 +29,7 @@ export async function startGateway({ config, env = process.env, fetchImpl = fetc
     response.once("close", abort);
     active.add(controller);
     void routeGatewayRequest({ request, response, config, signal: controller.signal, fetchImpl, channelsState,
-      now, sleep, prepare, getMetrics, log }).catch(() => {
+      now, sleep, prepare: metrics?.prepare, getMetrics: metrics?.getMetrics, log }).catch(() => {
       if (controller.signal.aborted || response.destroyed) return;
       log("failover-router: gateway request failed");
       if (!response.headersSent) response.writeHead(502, { "content-type": "application/json" });
@@ -36,16 +40,22 @@ export async function startGateway({ config, env = process.env, fetchImpl = fetc
       response.off("close", abort);
     });
   });
-  await new Promise((ready, fail) => {
-    server.once("error", fail);
-    server.listen({ host: config.listen.host, port: port ?? config.listen.port }, () => { server.off("error", fail); ready(); });
-  });
+  try {
+    await new Promise((ready, fail) => {
+      server.once("error", fail);
+      server.listen({ host: config.listen.host, port: port ?? config.listen.port }, () => { server.off("error", fail); ready(); });
+    });
+  } catch (error) {
+    metrics?.close();
+    throw error;
+  }
   const { port: boundPort } = server.address();
   const host = config.listen.host === "::1" ? "[::1]" : config.listen.host;
   let closed;
   return { url: `http://${host}:${boundPort}`, close() {
     if (closed) return closed;
     closing = true;
+    metrics?.close();
     for (const controller of active) controller.abort();
     closed = new Promise((done, fail) => server.close(error => error ? fail(error) : done()));
     server.closeAllConnections();
