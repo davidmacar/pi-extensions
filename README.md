@@ -14,7 +14,11 @@ Extensions for Pi and OpenCode, with shared logic where the two runtimes have eq
 - [`failover-router/opencode/`](./failover-router/opencode): loopback gateway, OpenCode examples, and integration tests. OpenCode does not load the Pi extension.
 - [`failover-router/common/`](./failover-router/common): routing rules and recovery, reasoning levels, price and speed caches.
 
-## Pi installation after the rename
+## Installation
+
+See the [installation guide](./failover-router/opencode/INSTALL.md) for the Pi router, OpenCode provider gateway, and Pi-only Telegram notifier.
+
+### Pi installation after the rename
 
 Set the extension entry in `~/.pi/agent/settings.json` to:
 
@@ -34,4 +38,4 @@ npm --prefix pi-telegram-notifier test
 node patches/gentle-pi-channels/verify.mjs
 ```
 
-The OpenCode runtime smoke is separate; see the [gateway guide](./failover-router/opencode).
+The OpenCode runtime smoke is separate; see the [gateway guide](./failover-router/opencode). The gateway also writes private per-attempt cost estimates to its state directory; missing usage or tariff data is marked unknown/partial.
