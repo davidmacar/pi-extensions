@@ -4,6 +4,15 @@
   "description": "OpenCode v2 server plugin for the ai-extensions failover gateway",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/davidmacar/pi-extensions.git",
+    "directory": "packages/opencode-failover-router"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "engines": {
     "node": ">=22.19.0"
   },

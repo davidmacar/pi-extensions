@@ -1,30 +1,52 @@
 # Failover Router for OpenCode
 
-This OpenCode v2 server plugin starts and stops the loopback failover gateway for you. It reuses the standalone gateway’s routing, shared tariffs, and local cost ledger. Pi and the standalone gateway remain supported; this package does not install or configure either of them.
+This OpenCode v2 server plugin starts and stops the loopback failover gateway for you. It reuses the standalone gateway’s routing, shared tariffs, and local cost ledger. It does not install or configure Pi or the standalone gateway. The installation paths below follow the [official OpenCode plugin guide](https://opencode.ai/docs/plugins/) and were tested on Linux with OpenCode `v2.0.32`.
 
 ## Install from a GitHub Release
 
-1. Download the versioned `opencode-failover-router-<version>.tgz` and its `.sha256` file from the same `opencode-v<version>` release. In the download directory run:
+1. Download `opencode-failover-router-<version>.tgz` and its `.sha256` file from the same [GitHub Release](https://github.com/davidmacar/pi-extensions/releases) tagged `opencode-v<version>`.
+2. Choose **one** of OpenCode's [auto-discovery locations](https://opencode.ai/docs/plugins/#discover):
+
+   | Scope | Extract the package to | Put provider settings in |
+   | --- | --- | --- |
+   | Global | `~/.config/opencode/plugins/opencode-failover-router/` | `~/.config/opencode/opencode.jsonc` |
+   | One project | `<project>/.opencode/plugins/opencode-failover-router/` | `<project>/opencode.jsonc` or `<project>/.opencode/opencode.jsonc` |
+
+   If `XDG_CONFIG_HOME` is set, use `$XDG_CONFIG_HOME/opencode` instead of `~/.config/opencode`. From the download directory, verify and extract the archive (replace `0.1.0` with the release version):
 
    ```sh
-   sha256sum --check opencode-failover-router-0.1.0.tgz.sha256
-   mkdir -p "$HOME/.local/share/opencode-failover-router/0.1.0"
-   tar -xzf opencode-failover-router-0.1.0.tgz -C "$HOME/.local/share/opencode-failover-router/0.1.0"
+   archive=opencode-failover-router-0.1.0.tgz
+   plugins_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins"
+   # For a project install, set plugins_dir to /absolute/path/to/project/.opencode/plugins instead.
+   plugin_dir="$plugins_dir/opencode-failover-router"
+   sha256sum --check "$archive.sha256" &&
+     mkdir -p "$plugins_dir" && mkdir "$plugin_dir" &&
+     tar -xzf "$archive" -C "$plugin_dir" --strip-components=1
    ```
 
-   Replace `0.1.0` with the downloaded version. Keep each version in its own directory so you can switch back by changing the plugin path.
-2. Copy `package/examples/gateway.example.json` to a private configuration file, replace the sample channel URLs and model IDs, and set `FAILOVER_ROUTER_CONFIG` to its **absolute path** in the OpenCode server environment. Provide the local `FAILOVER_ROUTER_KEY` and the channel credentials named by `apiKeyEnv` in that environment, not in the JSON. If the gateway should refresh SubRouter tariffs, provide `SUBROUTER_API_KEY` as well.
-3. Merge the `providers` block from `package/examples/opencode.example.jsonc` into your `opencode.jsonc` and append the extracted **package directory** to the existing `plugins` array:
+   The destination must be new; `package.json` and `index.js` should be directly inside `opencode-failover-router/`. No `plugins` entry is needed for this layout. Do not keep two versions in an auto-discovered `plugins/` directory. For an upgrade or rollback, stop OpenCode, move the current directory outside the discovery path, then extract or restore the desired version at the same path.
+3. Follow [Configure the gateway](#configure-the-gateway).
 
-   ```jsonc
-   {
-     "plugins": ["file:///home/you/.local/share/opencode-failover-router/0.1.0/package"]
-   }
-   ```
+### Use an explicit path instead
 
-   Do not point to `index.js` or the archive. Replace the example path with your own. The provider configuration still controls model IDs and protocol; its `baseURL` must match the gateway listener.
-4. Start OpenCode with the environment above, then select a configured model. With the example IDs, a standalone test is `opencode run --standalone --model failover-chat/chat-cheap "Say hello"`. A real provider may charge for this request.
+You can extract the package outside the auto-discovery directories and append its directory to `plugins` in `opencode.jsonc`:
 
-The tested runtime is OpenCode `v2.0.32` on Linux. The plugin runs in the **server** process: for a managed service, set the environment where the service starts and restart it. Do not start the standalone gateway on the same address. Multiple locations loading this package with the same config in one process share a listener; separate OpenCode processes must use different ports (and matching provider URLs) or share a standalone gateway instead.
+```jsonc
+{
+  "plugins": ["../local-plugins/opencode-failover-router"]
+}
+```
 
-The archive is an npm-format package, but GitHub Releases are the distribution channel. Nothing is published to the npm registry by this workflow.
+In this example, the config is `<project>/.opencode/opencode.jsonc` and the package is `<project>/local-plugins/opencode-failover-router/`. Relative paths resolve from the config file, not the shell. Absolute paths and `file://` URLs are also accepted. The entry must point to the directory containing `package.json`, not `index.js` or the `.tgz`. `opencode plugin add` does not accept GitHub Release tarballs.
+
+## Configure the gateway
+
+1. Copy `examples/gateway.example.json` from the extracted package to a private configuration file. Replace the sample channel URLs and model IDs and set `FAILOVER_ROUTER_CONFIG` to the file's **absolute path** in the OpenCode server environment.
+2. Set `FAILOVER_ROUTER_KEY` and the upstream credentials named by `apiKeyEnv` in that same environment, not in JSON or the plugin directory. To enable SubRouter tariff refresh, opt in via `refreshMarketplace` and provide `SUBROUTER_API_KEY` in the server environment. Never commit the live settings or credentials.
+3. Merge the `providers` block from the package's `examples/opencode.example.jsonc` into your existing config. Its `baseURL` must match the gateway listener. Restart OpenCode and select a configured model. With the example IDs, `opencode run --standalone --model failover-chat/chat-cheap "Say hello"` checks the connection; a real provider may charge for the request.
+
+Configure the environment on the machine and in the process where the **OpenCode server** runs. Do not start the standalone gateway on the same address. Separate OpenCode processes must use different listener ports (and matching provider URLs), or share a standalone gateway instead.
+
+## npm installation (after publication)
+
+GitHub Releases are the initial distribution channel. Once the package is published to npm, remove any local copy from OpenCode's discovery or configuration, then install a pinned version with `opencode plugin add opencode-failover-router@0.1.0`. Alternatively, add `"opencode-failover-router@0.1.0"` to `plugins` in `opencode.jsonc`. Use the published version and configure the gateway as above. The [repository examples](https://github.com/davidmacar/pi-extensions/tree/master/failover-router/opencode) are also available if you installed by name.

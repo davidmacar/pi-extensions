@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile, copyFile, constants } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const [tag, output] = process.argv.slice(2);
 const pkg = new URL("../", import.meta.url);
@@ -17,6 +18,8 @@ const scratch = await mkdtemp(join(tmpdir(), "opencode-release-"));
 try {
   execFileSync("npm", ["pack", "--pack-destination", scratch], { cwd: pkg, stdio: ["ignore", 2, 2] });
   const packed = join(scratch, filename);
+  const audit = fileURLToPath(new URL("./audit-tarball.mjs", import.meta.url));
+  execFileSync(process.execPath, [audit, packed], { stdio: ["ignore", 2, 2] });
   const digest = createHash("sha256").update(await readFile(packed)).digest("hex");
   await mkdir(dir); // An existing release directory must not be overwritten.
   await copyFile(packed, join(dir, filename), constants.COPYFILE_EXCL);

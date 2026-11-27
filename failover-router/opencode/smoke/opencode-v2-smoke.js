@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { accessSync, constants, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { startGateway } from "../src/server.js";
 
 // Opt-in Linux smoke; requires Bubblewrap with network namespaces. Never fall
@@ -98,13 +98,12 @@ function responsesStream(response, model, toolArgs) {
   ]);
 }
 
-function openCodeEnv(project, config) {
+function openCodeEnv(project) {
   const paths = Object.fromEntries(Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
     XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", TMPDIR: "tmp" }).map(([name, dir]) => [name, join(project, dir)]));
   for (const path of Object.values(paths)) mkdirSync(path, { recursive: true });
   return { ...env, ...paths, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", OTEL_SDK_DISABLED: "true",
-    OPENCODE_DISABLE_AUTOUPDATE: "1", OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-    OPENCODE_CONFIG_CONTENT: JSON.stringify(config) };
+    OPENCODE_DISABLE_AUTOUPDATE: "1", OPENCODE_DISABLE_MODELS_FETCH: "1" };
 }
 
 async function smoke(t, protocol, scratch, status524 = false) {
@@ -177,7 +176,9 @@ async function smoke(t, protocol, scratch, status524 = false) {
   };
   const stateDir = join(project, "gateway-state");
   const packaged = process.argv[3] === "--packaged";
-  let gateway, pluginEnv, plugins;
+  const install = !packaged ? "standalone" : chat ? "global discovery" : status524 ? "configured relative path" : "project discovery";
+  const runtimeEnv = openCodeEnv(project);
+  let gateway, plugin;
   if (packaged) {
     const socket = createServer();
     await new Promise((done, fail) => socket.once("error", fail).listen(0, "127.0.0.1", done));
@@ -185,23 +186,35 @@ async function smoke(t, protocol, scratch, status524 = false) {
     await new Promise((done, fail) => socket.close(error => error ? fail(error) : done()));
     const gatewayPath = join(project, "gateway.json");
     writeFileSync(gatewayPath, JSON.stringify({ ...gatewayConfig, listen: { port } }));
-    pluginEnv = { ...keys, FAILOVER_ROUTER_CONFIG: gatewayPath, FAILOVER_ROUTER_STATE_DIR: stateDir };
-    plugins = [pathToFileURL("/packed-plugin").href];
+    Object.assign(runtimeEnv, keys, { FAILOVER_ROUTER_CONFIG: gatewayPath, FAILOVER_ROUTER_STATE_DIR: stateDir });
+    const pluginsDirectory = chat ? join(runtimeEnv.XDG_CONFIG_HOME, "opencode", "plugins") :
+      join(project, status524 ? "local-plugins" : ".opencode/plugins");
+    mkdirSync(pluginsDirectory, { recursive: true });
+    cpSync("/tmp/package", join(pluginsDirectory, "opencode-failover-router"), { recursive: true });
+    if (status524) plugin = "../local-plugins/opencode-failover-router";
     gateway = { url: `http://127.0.0.1:${port}` };
   } else {
     gateway = await startGateway({ config: gatewayConfig, env: keys, port: 0, stateDir });
     t.after(() => gateway.close());
   }
   const config = {
-    ...(plugins ? { plugins } : {}),
+    ...(plugin ? { plugins: [plugin] } : {}),
     update: "disable",
     permissions: [{ action: "*", resource: "*", effect: "deny" }, { action: "read", resource: "*", effect: "allow" }],
     providers: { smoke: { name: "Smoke gateway", package: sdkPackage, settings: { baseURL: `${gateway.url}/v1`, apiKey: keys.LOCAL, ...(chat ? {} : { store: false }) },
       models: { [model]: { name: model, capabilities: { tools: true }, limit: { context: 8192, output: 1024 } } } } },
   };
+  if (packaged) {
+    const configDirectory = chat ? join(runtimeEnv.XDG_CONFIG_HOME, "opencode") : join(project, ".opencode");
+    mkdirSync(configDirectory, { recursive: true });
+    writeFileSync(join(configDirectory, "opencode.jsonc"), JSON.stringify(config));
+  } else {
+    runtimeEnv.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
+    runtimeEnv.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
+  }
   const result = await command("/opencode", ["run", "--standalone", ...(packaged ? ["--print-logs", "--log-level", "warn"] : []), "--format", "json", "--model", `smoke/${model}`, "--title", "Failover smoke",
-    "Read fixture.txt exactly once and report what happened."], { cwd: project, env: { ...openCodeEnv(project, config), ...pluginEnv }, timeout: 8000 });
-  t.diagnostic(JSON.stringify({ protocol, sdkPackage, attempts, ...result }));
+    "Read fixture.txt exactly once and report what happened."], { cwd: project, env: runtimeEnv, timeout: 8000 });
+  t.diagnostic(JSON.stringify({ install, protocol, sdkPackage, attempts, ...result }));
   const mockErrors = [...primary.errors, ...backup.errors];
   assert.deepEqual(mockErrors.map(error => error.message), [], `${protocol} mock assertions`);
   assert.equal(result.exitCode, 0);
@@ -232,7 +245,7 @@ if (process.argv[2] === "--worker") {
   test("OpenCode v2.0.32 loopback failover", async t => {
     assert.ok(Object.values(networkInterfaces()).flat().every(address => address.internal), "requires loopback-only sandbox");
     const scratch = process.cwd();
-    const version = await command("/opencode", ["--version"], { cwd: scratch, env: openCodeEnv(join(scratch, "version"), {}), timeout: 3000 });
+    const version = await command("/opencode", ["--version"], { cwd: scratch, env: openCodeEnv(join(scratch, "version")), timeout: 3000 });
     t.diagnostic(JSON.stringify({ version }));
     assert.equal(version.exitCode, 0);
     assert.equal(version.stdout.trim(), "opencode v2.0.32");
@@ -252,7 +265,6 @@ if (process.argv[2] === "--worker") {
       "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
       "--proc", "/proc", "--dev", "/dev", "--ro-bind", router, "/router", "--ro-bind", binary, "/opencode",
       "--ro-bind", process.execPath, "/node", "--bind", scratch, "/tmp",
-      ...(archive ? ["--ro-bind", join(scratch, "package"), "/packed-plugin"] : []),
       "--chdir", "/tmp", "--setenv", "HOME", "/tmp", "/node",
       "/router/opencode/smoke/opencode-v2-smoke.js", "--worker", ...(archive ? ["--packaged"] : [])], { timeout: 30_000 });
     t.diagnostic(result.stdout.trimEnd());
