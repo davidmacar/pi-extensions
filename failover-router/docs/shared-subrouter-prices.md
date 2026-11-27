@@ -1,0 +1,8 @@
+# One SubRouter tariff feed for Pi and OpenCode
+
+Set `SUBROUTER_API_KEY` in the environment of Pi, the OpenCode gateway, or both. Use the SubRouter relay key, not an account-management token. Do not put it in the repository, the gateway JSON, or OpenCode's provider configuration. The tariff request sends the key only to `https://subrouter.ai` and does not follow redirects. The marketplace publishes these tariffs; the key does not turn them into an account billing statement.
+
+- Give matching channels names like `subrouter-<marketplace-slug>` and use the same upstream model ID in both configurations. `order: "cost"` compares input prices in CNY per million tokens. If there are no known prices, the configured order wins.
+- Both processes watch the same cache directory: `$XDG_STATE_HOME/ai-extensions/subrouter-prices` (default `~/.local/state/ai-extensions/subrouter-prices`). Set `SUBROUTER_PRICE_CACHE_DIR` to the same absolute path for both if their environments differ, or to make a process with no key read the shared feed without public lookups for its SubRouter channels.
+- After the session or gateway starts, a process with a key checks for updates immediately and then hourly. A fresh snapshot is reused, and a publication is picked up by the other process without restart. If only one process has the key, it refreshes the models configured on that process; configure both as writers if their model lists differ, or ensure the writer covers all desired models.
+- The cache keeps the native input, output, and cache tariffs that the marketplace reports. Both adapters normalize USD to CNY with SubRouter's 6.8 rate. Missing fields are not invented; failed refreshes keep the last published prices. This is **not** a per-request spend ledger.

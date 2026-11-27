@@ -21,14 +21,14 @@ The gateway accepts the local Bearer key on `/v1/models`, `/v1/chat/completions`
 | Setting | Behavior |
 | --- | --- |
 | `order: "configured"` | Follow the listed order. This is the default. |
-| `order: "cost"` | Prefer known input prices; fall back to listed order. `refreshMarketplace: true` fetches public SubRouter prices for `subrouter-*` channel IDs, using the suffix as the marketplace slug. |
+| `order: "cost"` | Prefer known input tariffs; fall back to listed order. The [shared SubRouter tariff feed](../docs/shared-subrouter-prices.md) identifies channels by `subrouter-<marketplace-slug>`. |
 | `order: "speed"` | Prefer recently measured throughput. `probeSpeed: true` enables short, billable probes on speed-profile candidates; it is off by default. |
 | `recovery: "chain"` | Try each candidate once per pass, with up to four passes per gateway request. Channel failures trigger shared backoff; malformed requests and unknown failures do not rotate. |
 | `recovery: "physical"` | Keep one configured candidate and allow three groups of three attempts, with a five-minute pause between groups. It never switches to another model. |
 | `reasoningLevels` / `reasoningEffort` | Declare supported levels per candidate or pin a level. Use `[]` for a non-reasoning candidate. Unsupported requested levels are clamped or omitted. |
 | `attemptTimeoutMs` | Maximum time for one physical dispatch, including its body. Default: 300,000 ms. Cooldown waits are separate and cancel when the client disconnects. |
 
-Gateway state files are separate from Pi's. The default is `$XDG_STATE_HOME/ai-extensions/failover-router`, or `~/.local/state/ai-extensions/failover-router` if `XDG_STATE_HOME` is unset. Override it with `FAILOVER_ROUTER_STATE_DIR`. The gateway example disables both external measurements; enable them explicitly if wanted.
+Speed probes and legacy public prices use the gateway state directory (`$XDG_STATE_HOME/ai-extensions/failover-router`, falling back to `~/.local/state/ai-extensions/failover-router`). Override it with `FAILOVER_ROUTER_STATE_DIR`. Set `SUBROUTER_API_KEY` in the gateway environment to refresh shared tariffs at startup and hourly; no change to `refreshMarketplace` is required. That setting still enables the legacy public opt-in when shared pricing is not explicitly configured.
 
 **Streaming trade-off:** the gateway buffers one full response (up to 16 MiB) before forwarding it. A broken attempt cannot expose its partial text or tool instructions to OpenCode, but this increases time to first output. OpenCode, not the gateway, executes tools. Completed tool results are forwarded as normal conversation input; the gateway does not rerun tools. A new model can still request another tool call.
 

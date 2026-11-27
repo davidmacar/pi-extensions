@@ -9,7 +9,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "node --test \"pi/test/**/*.test.js\" \"opencode/test/**/*.test.js\"",
+    "test": "node --import ./test/isolated-prices.js --test \"common/**/*.test.js\" \"pi/test/**/*.test.js\" \"opencode/test/**/*.test.js\"",
     "check": "npm test",
     "gateway": "node opencode/src/server.js",
     "test:opencode:smoke": "node --test \"opencode/smoke/*.js\""

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sharedPriceDir } from "../../common/shared-prices.js";
 import { normalizeGatewayConfig } from "./config.js";
 import { createMetrics } from "./metrics.js";
 import { routeGatewayRequest } from "./route.js";
@@ -11,7 +12,10 @@ export async function startGateway({ config, env = process.env, fetchImpl = fetc
   stateDir = env.FAILOVER_ROUTER_STATE_DIR ?? resolve(env.XDG_STATE_HOME || resolve(homedir(), ".local/state"), "ai-extensions", "failover-router"),
   log = () => {}, port } = {}) {
   config = normalizeGatewayConfig(config, { env });
-  const metrics = config.probeSpeed || config.refreshMarketplace ? createMetrics({ config, stateDir, fetchImpl, now, log }) : undefined;
+  const pricesConfigured = Object.keys(config.channels).some(channel => /^subrouter-.+$/.test(channel));
+  const metrics = config.probeSpeed || pricesConfigured ? createMetrics({ config, stateDir, fetchImpl, now, log,
+    sharedPriceDir: sharedPriceDir(env), priceKey: env.SUBROUTER_API_KEY?.trim(),
+    sharedOnly: Boolean(env.SUBROUTER_API_KEY?.trim() || env.SUBROUTER_PRICE_CACHE_DIR) }) : undefined;
   const channelsState = new Map();
   const active = new Set();
   let closing = false;
@@ -49,6 +53,7 @@ export async function startGateway({ config, env = process.env, fetchImpl = fetc
     metrics?.close();
     throw error;
   }
+  metrics?.start();
   const { port: boundPort } = server.address();
   const host = config.listen.host === "::1" ? "[::1]" : config.listen.host;
   let closed;

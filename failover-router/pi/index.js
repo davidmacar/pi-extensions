@@ -53,6 +53,7 @@ import { probeChannels } from "../common/speed-probe.js";
 import { lastAssistantMessage, resolveDeadEnd } from "./lib/dead-end.js";
 import { emptyPriceCache, orderByPrice, priceSnapshot, prunePriceCache, readPriceCache, recordPrices } from "../common/price-cache.js";
 import { fetchSubrouterPrices } from "../common/subrouter-prices.js";
+import { createSharedPrices, PRICE_REFRESH_MS, sharedPriceDir } from "../common/shared-prices.js";
 
 export const DEFAULT_CONFIG_FILE = "failover-router.json";
 export const DEFAULT_SPEED_FILE = "failover-router-speed.json";
@@ -60,7 +61,7 @@ export const DEFAULT_PRICE_FILE = "failover-router-price.json";
 /** How often an active session refreshes its measurements. */
 export const SPEED_REFRESH_MS = 15 * 60_000;
 /** How often an active Pi session refreshes marketplace prices. */
-export const PRICE_REFRESH_MS = 60 * 60_000;
+export { PRICE_REFRESH_MS };
 export const PRICES_EVENT = "failover-router:prices";
 /**
  * How long a request may wait for the measurement session before routing with
@@ -143,8 +144,9 @@ export default function failoverRouter(pi) {
   const lastRouted = new Map();
   /** Latest measurements, shared by every virtual that orders by speed. */
   let speedCache = emptyCache();
-  /** Latest public marketplace prices, shared by cost-ordered virtuals. */
-  let priceCache = emptyPriceCache();
+  /** Latest local and shared tariffs, combined only when the price feed changes. */
+  let localPrices = emptyPriceCache();
+  let priceCache = localPrices;
   /** The measurement session in flight, if any. */
   let measurement = null;
   /** The price refresh in flight, if any. */
@@ -229,7 +231,20 @@ export default function failoverRouter(pi) {
   if (virtuals.length === 0) return;
 
   speedCache = readSpeedCache(speedPath, { readFile: readFileSync }) ?? emptyCache();
-  priceCache = readPriceCache(pricePath, { readFile: readFileSync }) ?? emptyPriceCache();
+  localPrices = readPriceCache(pricePath, { readFile: readFileSync }) ?? emptyPriceCache();
+  const refs = [...new Set(virtuals.flatMap(def => def.chain.map(step => step.model)))];
+  const priceKey = process.env.SUBROUTER_API_KEY?.trim();
+  const sharedOnly = Boolean(priceKey || process.env.SUBROUTER_PRICE_CACHE_DIR);
+  const publicRefs = sharedOnly ? refs.filter(ref => !/^subrouter-[^/]+\//.test(ref)) : refs;
+  const sharedPrices = createSharedPrices({ dir: sharedPriceDir(), refs, apiKey: priceKey,
+    fetchImpl: pi.subrouterFetch ?? globalThis.fetch, log });
+  const mergePrices = () => {
+    const shared = sharedPrices.snapshot();
+    const legacy = sharedOnly ? prunePriceCache(localPrices, publicRefs) : localPrices;
+    priceCache = { ...legacy, updatedAt: Math.max(legacy.updatedAt, shared.updatedAt),
+      prices: { ...legacy.prices, ...shared.prices } };
+  };
+  mergePrices();
 
   /**
    * Publishes the snapshot the Channels card paints: what routing already knows,
@@ -748,16 +763,15 @@ export default function failoverRouter(pi) {
   });
 
   // ---- throughput and marketplace refresh ------------------------------------
-  const refs = [...new Set(virtuals.flatMap((def) => def.chain.map((s) => s.model)))];
   const speedRefs = [
     ...new Set(virtuals.filter((def) => def.order === "speed").flatMap((def) => def.chain.map((s) => s.model))),
   ];
 
   const persistPrices = () => {
-    priceCache = prunePriceCache(priceCache, refs);
+    localPrices = prunePriceCache(localPrices, refs);
     try {
       const temporary = `${pricePath}.tmp-${process.pid}`;
-      writeFileSync(temporary, `${JSON.stringify(priceCache, null, 2)}\n`);
+      writeFileSync(temporary, `${JSON.stringify(localPrices, null, 2)}\n`);
       renameSync(temporary, pricePath);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -765,33 +779,38 @@ export default function failoverRouter(pi) {
     }
   };
   persistPrices();
-
-  const refreshPrices = () => {
+  mergePrices();
+  const publishPrices = () => {
+    mergePrices();
+    publishChannels();
+    try { pi.events?.emit?.(PRICES_EVENT, priceSnapshot(priceCache, refs)); } catch {}
+  };
+  const refreshPrices = sharedJob => {
     if (priceRefresh) return priceRefresh;
-    priceRefresh = fetchSubrouterPrices(refs, {
+    const publicJob = publicRefs.length && fetchSubrouterPrices(publicRefs, {
       fetchImpl: pi.subrouterFetch ?? globalThis.fetch,
       log,
     }).then(({ prices, failures }) => {
       if (Object.keys(prices).length > 0) {
-        priceCache = recordPrices(priceCache, prices, Date.now());
+        localPrices = recordPrices(localPrices, prices, Date.now());
         persistPrices();
-        publishChannels();
-        try { pi.events?.emit?.(PRICES_EVENT, priceSnapshot(priceCache, refs)); } catch {}
+        publishPrices();
       }
       if (failures.length > 0) log(`failover-router: ${failures.length} marketplace price fetch(es) failed`);
     }).catch(error => {
       log(`failover-router: marketplace price refresh failed: ${error instanceof Error ? error.message : String(error)}`);
-    }).finally(() => {
-      priceRefresh = null;
     });
+    if (!publicJob && !sharedJob) return;
+    priceRefresh = Promise.allSettled([publicJob, sharedJob]).finally(() => { priceRefresh = null; });
     return priceRefresh;
   };
 
   let refreshTimer = undefined;
   let priceTimer = undefined;
   pi.on?.("session_start", () => {
-    void refreshPrices();
-    if (priceTimer === undefined) {
+    const sharedJob = sharedPrices.start(publishPrices);
+    void refreshPrices(sharedJob);
+    if (publicRefs.length && priceTimer === undefined) {
       priceTimer = setInterval(() => { void refreshPrices(); }, PRICE_REFRESH_MS);
       priceTimer.unref?.();
     }
@@ -799,6 +818,7 @@ export default function failoverRouter(pi) {
   pi.on?.("session_shutdown", () => {
     if (priceTimer !== undefined) clearInterval(priceTimer);
     priceTimer = undefined;
+    sharedPrices.stop();
   });
 
   const persist = () => {

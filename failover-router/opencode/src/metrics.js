@@ -7,10 +7,10 @@ import {
 import { PROBE_PROMPT, PROBE_MAX_TOKENS } from "../../common/speed-probe.js";
 import { prunePriceCache, readPriceCache, recordPrices } from "../../common/price-cache.js";
 import { fetchSubrouterPrices } from "../../common/subrouter-prices.js";
+import { createSharedPrices, PRICE_REFRESH_MS } from "../../common/shared-prices.js";
 import { ADMISSIBLE_LEVELS } from "../../common/thinking-level.js";
 import { dispatchUpstream } from "./upstream.js";
 
-const PRICE_REFRESH_MS = 60 * 60_000;
 const STARTUP_WAIT_MS = 8_000;
 const SPEED_FILE = "failover-router-speed.json";
 const PRICE_FILE = "failover-router-price.json";
@@ -58,7 +58,7 @@ function waitBounded(jobs, request, shutdown) {
 }
 
 /** Opt-in gateway metrics; only startup work is awaited, and only for a bounded time. */
-export function createMetrics({ config, stateDir, fetchImpl = globalThis.fetch, now = Date.now, log = () => {} }) {
+export function createMetrics({ config, stateDir, sharedPriceDir, priceKey, sharedOnly = false, fetchImpl = globalThis.fetch, now = Date.now, log = () => {} }) {
   const speedPath = join(stateDir, SPEED_FILE);
   const pricePath = join(stateDir, PRICE_FILE);
   const profiles = Object.values(config.profiles);
@@ -68,6 +68,10 @@ export function createMetrics({ config, stateDir, fetchImpl = globalThis.fetch, 
     .filter(step => /^subrouter-.+/.test(step.channel)).map(refFor))];
   let speedCache = pruneCache(readSpeedCache(speedPath, { readFile: readFileSync }), speedRefs);
   let priceCache = prunePriceCache(readPriceCache(pricePath, { readFile: readFileSync }), priceRefs);
+  const shared = sharedPriceDir && priceRefs.length ? createSharedPrices({ dir: sharedPriceDir, refs: priceRefs,
+    apiKey: priceKey, fetchImpl, now, log }) : undefined;
+  let sharedStartup;
+  let sharedStarted = false;
   let lastPriceAttempt = priceCache.updatedAt || (Object.keys(priceCache.prices).length ? 0 : undefined);
   let priceJob;
   let priceTimer;
@@ -186,11 +190,20 @@ export function createMetrics({ config, stateDir, fetchImpl = globalThis.fetch, 
     return priceJob;
   }
 
+  function start() {
+    if (!shared || sharedStarted || stopped.aborted) return;
+    sharedStarted = true;
+    const initial = shared.start();
+    if (initial) sharedStartup = initial.finally(() => { sharedStartup = undefined; });
+  }
+
   async function prepare(profile, signal) {
     signal?.throwIfAborted();
     if (stopped.aborted) return;
     const jobs = prepareSpeed(profile);
-    if (config.refreshMarketplace === true && priceRefs.length) {
+    start();
+    if (profile.order === "cost" && sharedStartup) jobs.push(sharedStartup);
+    if (!sharedOnly && config.refreshMarketplace === true && priceRefs.length) {
       if (priceTimer === undefined) {
         priceTimer = setInterval(refreshPrices, PRICE_REFRESH_MS);
         priceTimer.unref();
@@ -204,8 +217,15 @@ export function createMetrics({ config, stateDir, fetchImpl = globalThis.fetch, 
   function close() {
     if (stopped.aborted) return;
     clearInterval(priceTimer);
+    shared?.stop();
     shutdown.abort();
   }
 
-  return { prepare, getMetrics: () => ({ speedCache, priceCache }), close };
+  function getMetrics() {
+    const snapshot = shared?.snapshot();
+    if (snapshot && sharedOnly) return { speedCache, priceCache: snapshot };
+    return { speedCache, priceCache: snapshot ? { ...priceCache, updatedAt: Math.max(priceCache.updatedAt, snapshot.updatedAt),
+      prices: { ...priceCache.prices, ...snapshot.prices } } : priceCache };
+  }
+  return { start, prepare, getMetrics, close };
 }
