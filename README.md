@@ -4,7 +4,7 @@ Extensions for Pi and OpenCode, with shared logic where the two runtimes have eq
 
 | Component | Pi | OpenCode |
 | --- | --- | --- |
-| [Failover Router](./failover-router) | [Native extension](./failover-router/pi) | [Local provider gateway](./failover-router/opencode) |
+| [Failover Router](./failover-router) | [Native extension](./failover-router/pi) | [Server plugin](./packages/opencode-failover-router) or [standalone gateway](./failover-router/opencode) |
 | [Telegram notifier](./pi-telegram-notifier) | Native extension | Not included |
 | [Channels card](./patches/gentle-pi-channels) | Gentle Shell patch | Not included |
 
@@ -16,7 +16,7 @@ Extensions for Pi and OpenCode, with shared logic where the two runtimes have eq
 
 ## Installation
 
-See the [installation guide](./failover-router/opencode/INSTALL.md) for the Pi router, OpenCode provider gateway, and Pi-only Telegram notifier.
+Use the [OpenCode plugin guide](./packages/opencode-failover-router/README.md) to install a packaged release, or the [standalone installation guide](./failover-router/opencode/INSTALL.md) for the Pi router, separate gateway, and Pi-only Telegram notifier. Maintainers can follow the [OpenCode release checklist](./packages/opencode-failover-router/RELEASING.md).
 
 ### Pi installation after the rename
 

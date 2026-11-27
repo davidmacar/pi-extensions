@@ -1,0 +1,78 @@
+name: Build OpenCode plugin release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: opencode-plugin-release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: startsWith(github.event.release.tag_name, 'opencode-v') && !github.event.release.prerelease
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.1
+      - name: Build the tagged package
+        run: node packages/opencode-failover-router/scripts/release.mjs "$RELEASE_TAG" "$RUNNER_TEMP/opencode-plugin-release"
+      - name: Run router and package tests
+        run: |
+          npm --prefix failover-router test
+          npm --prefix packages/opencode-failover-router test
+      - name: Install the pinned test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          runtime="$RUNNER_TEMP/opencode-runtime"
+          mkdir "$runtime"
+          npm pack @opencode/cli-linux-x64@2.0.32 --ignore-scripts --pack-destination "$runtime"
+          tar -xzf "$runtime/opencode-cli-linux-x64-2.0.32.tgz" -C "$runtime"
+          "$runtime/package/bin/opencode" --version
+      - name: Test the candidate in native OpenCode
+        run: |
+          export OPENCODE_BIN="$RUNNER_TEMP/opencode-runtime/package/bin/opencode"
+          export OPENCODE_PLUGIN_TARBALL="$RUNNER_TEMP/opencode-plugin-release/opencode-failover-router-${RELEASE_TAG#opencode-v}.tgz"
+          npm --prefix failover-router run test:opencode:smoke
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: opencode-plugin-release
+          path: ${{ runner.temp }}/opencode-plugin-release/
+          if-no-files-found: error
+
+  attach:
+    needs: verify
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: opencode-plugin-release
+          path: release
+      - name: Attach the verified package and checksum
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive="opencode-failover-router-${RELEASE_TAG#opencode-v}.tgz"
+          sha256sum --check "$archive.sha256"
+          gh release upload --repo "$GITHUB_REPOSITORY" -- "$RELEASE_TAG" "$archive" "$archive.sha256"
