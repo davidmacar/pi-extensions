@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { sharedPriceDir } from "../../common/shared-prices.js";
 import { normalizeGatewayConfig } from "./config.js";
 import { createMetrics } from "./metrics.js";
 import { routeGatewayRequest } from "./route.js";
+import { createCostLedger } from "./cost-ledger.js";
 
 export async function startGateway({ config, env = process.env, fetchImpl = fetch, now = Date.now, sleep,
   stateDir = env.FAILOVER_ROUTER_STATE_DIR ?? resolve(env.XDG_STATE_HOME || resolve(homedir(), ".local/state"), "ai-extensions", "failover-router"),
@@ -17,7 +19,8 @@ export async function startGateway({ config, env = process.env, fetchImpl = fetc
     sharedPriceDir: sharedPriceDir(env), priceKey: env.SUBROUTER_API_KEY?.trim(),
     sharedOnly: Boolean(env.SUBROUTER_API_KEY?.trim() || env.SUBROUTER_PRICE_CACHE_DIR) }) : undefined;
   const channelsState = new Map();
-  const active = new Set();
+  const ledger = createCostLedger({ stateDir, now, log });
+  const active = new Map();
   let closing = false;
   const server = createServer({ headersTimeout: 10_000, requestTimeout: 120_000 }, (request, response) => {
     if (closing || active.size >= 8) {
@@ -31,9 +34,8 @@ export async function startGateway({ config, env = process.env, fetchImpl = fetc
     const abort = () => { if (!response.writableFinished) controller.abort(); };
     request.once("aborted", abort);
     response.once("close", abort);
-    active.add(controller);
-    void routeGatewayRequest({ request, response, config, signal: controller.signal, fetchImpl, channelsState,
-      now, sleep, prepare: metrics?.prepare, getMetrics: metrics?.getMetrics, log }).catch(() => {
+    const task = routeGatewayRequest({ request, response, config, signal: controller.signal, fetchImpl, channelsState, ledger,
+      requestId: randomUUID(), now, sleep, prepare: metrics?.prepare, getMetrics: metrics?.getMetrics, log }).catch(() => {
       if (controller.signal.aborted || response.destroyed) return;
       log("failover-router: gateway request failed");
       if (!response.headersSent) response.writeHead(502, { "content-type": "application/json" });
@@ -43,6 +45,7 @@ export async function startGateway({ config, env = process.env, fetchImpl = fetc
       request.off("aborted", abort);
       response.off("close", abort);
     });
+    active.set(controller, task);
   });
   try {
     await new Promise((ready, fail) => {
@@ -51,6 +54,7 @@ export async function startGateway({ config, env = process.env, fetchImpl = fetc
     });
   } catch (error) {
     metrics?.close();
+    ledger.close();
     throw error;
   }
   metrics?.start();
@@ -61,8 +65,10 @@ export async function startGateway({ config, env = process.env, fetchImpl = fetc
     if (closed) return closed;
     closing = true;
     metrics?.close();
-    for (const controller of active) controller.abort();
-    closed = new Promise((done, fail) => server.close(error => error ? fail(error) : done()));
+    const tasks = [...active.values()];
+    for (const controller of active.keys()) controller.abort();
+    const stopped = new Promise((done, fail) => server.close(error => error ? fail(error) : done()));
+    closed = Promise.allSettled(tasks).then(() => ledger.close()).then(() => stopped);
     server.closeAllConnections();
     return closed;
   } };

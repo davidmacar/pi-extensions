@@ -7,6 +7,7 @@ import { orderBySpeed } from "../../common/speed-order.js";
 import { dispatchRecovery, newRecovery, planRecovery, newPhysicalRecovery, planPhysicalRecovery, physicalWaitMs } from "../../common/recovery.js";
 import { resolveLevel } from "../../common/thinking-level.js";
 import { dispatchUpstream, failure } from "./upstream.js";
+import { normalizeUsage } from "./cost-ledger.js";
 
 const MAX_BODY = 8 * 1024 * 1024;
 const PATHS = new Set(["/v1/chat/completions", "/v1/responses"]);
@@ -41,7 +42,7 @@ function reply(response, result, extra = {}) {
 }
 
 export async function routeGatewayRequest({ request, response, config, signal, fetchImpl = fetch, dispatch = dispatchUpstream,
-  channelsState = new Map(), getMetrics = () => ({}), prepare = async () => {}, now = Date.now, sleep = abortableSleep, log = () => {} }) {
+  channelsState = new Map(), getMetrics = () => ({}), prepare = async () => {}, ledger, requestId, now = Date.now, sleep = abortableSleep, log = () => {} }) {
   const reject = (status, message, type = "invalid_request_error", extra) => {
     request.resume();
     reply(response, failure(status, message, type), extra);
@@ -74,7 +75,9 @@ export async function routeGatewayRequest({ request, response, config, signal, f
 
   await prepare(profile, signal);
   signal?.throwIfAborted();
-  const ordered = candidateOrder(profile, config.channels, getMetrics());
+  const metrics = getMetrics();
+  const ordered = candidateOrder(profile, config.channels, metrics);
+  const protocol = path.slice(4);
   const first = ordered.find(step => (channelsState.get(step.model)?.until ?? 0) <= now()) ?? ordered[0];
   const state = newRecovery();
   const physical = profile.recovery === "physical" ? newPhysicalRecovery() : undefined;
@@ -108,14 +111,29 @@ export async function routeGatewayRequest({ request, response, config, signal, f
       delete outgoing.reasoning_effort;
       if (effort) outgoing.reasoning_effort = effort;
     }
-    const result = await dispatch({ channel: config.channels[step.channel], path: path.slice(3), payload: outgoing, signal,
-      fetchImpl, timeoutMs: config.attemptTimeoutMs ?? 300_000 });
+    const tariff = metrics.priceCache?.prices?.[step.model];
+    const record = (result, verdict, aborted = false) => {
+      ledger?.record({ requestId, attempt: seen + 1, protocol, requestedModel: payload.model,
+        channel: step.channel, model: step.upstreamModel, statusCode: result?.status,
+        outcome: aborted ? "aborted" : result?.ok ? "succeeded" : "failed",
+        failureKind: aborted ? "aborted" : verdict?.kind,
+        usage: normalizeUsage(protocol, result?.usageBody), tariff });
+    };
+    let result;
+    try {
+      result = await dispatch({ channel: config.channels[step.channel], path: path.slice(3), payload: outgoing, signal,
+        fetchImpl, timeoutMs: config.attemptTimeoutMs ?? 300_000 });
+    } catch (error) {
+      record(undefined, { kind: "unknown" }, signal?.aborted);
+      throw error;
+    }
+    const verdict = result.ok || signal?.aborted ? undefined : classifyFailure(result.detail);
+    record(result, verdict, signal?.aborted);
     signal?.throwIfAborted();
     if (result.ok) {
       if (channelsState.get(step.model) === before) channelsState.delete(step.model);
       return reply(response, result, { "x-failover-channel": step.channel });
     }
-    const verdict = classifyFailure(result.detail);
     if (!verdict.rotate) return reply(response, result);
     ++seen;
     log(`failover-router: ${payload.model} ${step.model} ${verdict.kind} (attempt ${seen})`);

@@ -55,3 +55,18 @@ test("oversized upstream errors retain their status for classification, not thei
   assert.match(result.detail, /^503: .*maintenance/);
   assert.deepEqual(JSON.parse(result.body), { error: { message: "Upstream HTTP 503", type: "server_error" } });
 });
+
+
+test("usage from a complete SSE event survives a later transport interruption", async () => {
+  const usage = { input_tokens: 10, output_tokens: 2 };
+  let sent = false;
+  const stream = new ReadableStream({ pull(controller) {
+    if (sent) return controller.error(new Error("fixture disconnected"));
+    sent = true;
+    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: "response.in_progress", response: { usage } })}\n\n`));
+  } });
+  const result = await dispatchUpstream({ channel, path: "/responses", payload: { stream: true }, timeoutMs: 1000,
+    fetchImpl: async () => respond(stream, { contentType: "text/event-stream" }) });
+  assert.equal(result.detail, "incomplete_stream");
+  assert.deepEqual(result.usageBody, usage);
+});
