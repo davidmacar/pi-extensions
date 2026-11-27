@@ -4,6 +4,7 @@ export const PRICE_CACHE_KIND = "pi-failover-router.price";
 export const PRICE_CACHE_VERSION = 1;
 /** SubRouter's established marketplace conversion for native USD offers. */
 export const USD_TO_CNY = 6.8;
+const ADDITIONAL_RATES = ["output_price", "effective_cache_read_price", "effective_cache_creation_price", "effective_cache_creation_price_1h"];
 
 export function emptyPriceCache() {
   return { kind: PRICE_CACHE_KIND, version: PRICE_CACHE_VERSION, updatedAt: 0, prices: {} };
@@ -30,6 +31,10 @@ function normalizeEntry(entry) {
     model_name: typeof entry.model_name === "string" ? entry.model_name : undefined,
     input_price,
     price_currency,
+    ...Object.fromEntries(ADDITIONAL_RATES.flatMap(name => {
+      const price = validPrice(entry[name]);
+      return price === undefined ? [] : [[name, price]];
+    })),
     fetchedAt: Number.isFinite(entry.fetchedAt) ? entry.fetchedAt : 0,
   };
 }
@@ -92,6 +97,19 @@ export function priceFor(cache, ref) {
   if (currency === "CNY") return { input_price, price_currency: "CNY" };
   if (currency === "USD") return { input_price: input_price * USD_TO_CNY, price_currency: "CNY" };
   return undefined;
+}
+
+/** Canonical SubRouter tariffs in CNY per million tokens; absent rates stay absent. */
+export function tariffFor(cache, ref) {
+  const entry = cache?.prices?.[ref];
+  const input = priceFor(cache, ref);
+  if (!input) return undefined;
+  const factor = entry.price_currency.trim().toUpperCase() === "USD" ? USD_TO_CNY : 1;
+  return { price_currency: "CNY", input_price: input.input_price,
+    ...Object.fromEntries(ADDITIONAL_RATES.flatMap(name => {
+      const price = validPrice(entry[name]);
+      return price === undefined ? [] : [[name, price * factor]];
+    })) };
 }
 
 /**
