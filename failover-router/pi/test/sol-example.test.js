@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { loadRouterConfig } from "../lib/config.js";
+import { loadRouterConfig } from "../../common/config.js";
 
 const channels = ["fxpayback", "xcgx", "fate86api", "a6aa", "openai-pro", "lingai"];
-const configPath = new URL("../failover-router.example.json", import.meta.url);
+const configPath = new URL("../../failover-router.example.json", import.meta.url);
 const expectedChain = channels.map((channel) => ({ model: `subrouter-${channel}/gpt-6.2-sol` }));
 
 test("Sol examples retain the cost and speed routes with all six replacement channels", () => {

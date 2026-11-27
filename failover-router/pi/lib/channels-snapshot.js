@@ -9,9 +9,9 @@
  * provider or a live session.
  */
 
-import { orderBySpeed } from "./speed-order.js";
-import { tokensPerSecond } from "./speed-cache.js";
-import { orderByPrice, priceFor } from "./price-cache.js";
+import { orderBySpeed } from "../../common/speed-order.js";
+import { tokensPerSecond } from "../../common/speed-cache.js";
+import { orderByPrice, priceFor } from "../../common/price-cache.js";
 
 /** The shape a consumer validates before painting it. */
 export const CHANNELS_SNAPSHOT_SCHEMA = "gentle-pi.channels-sidebar/v2";

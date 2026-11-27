@@ -77,6 +77,6 @@ reappear until the next restart.
 
 ## Offline verification
 
-`node --test test/sol-example.test.js` checks both routes, the six physical entries, placeholder shape
+`node --test failover-router/pi/test/sol-example.test.js` checks both routes, the six physical entries, placeholder shape
 and the preserved DeepSeek example routes. It reads repository fixtures only: no credentials, no
 network. Live tests remain deferred until requested.

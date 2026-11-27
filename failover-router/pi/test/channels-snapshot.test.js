@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildChannelsSnapshot, isChannelsSnapshot, CHANNELS_SNAPSHOT_SCHEMA, CHANNELS_SNAPSHOT_EVENT } from "../lib/channels-snapshot.js";
-import { emptyCache, recordFailure, recordSample, tokensPerSecond } from "../lib/speed-cache.js";
-import { orderBySpeed } from "../lib/speed-order.js";
-import { emptyPriceCache, recordPrices } from "../lib/price-cache.js";
+import { emptyCache, recordFailure, recordSample, tokensPerSecond } from "../../common/speed-cache.js";
+import { orderBySpeed } from "../../common/speed-order.js";
+import { emptyPriceCache, recordPrices } from "../../common/price-cache.js";
 
 const SOL = "gpt-6.2-sol";
 const DEEPSEEK = "deepseek-v4.1-flash-1017";

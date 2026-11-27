@@ -6,7 +6,7 @@ import {
   isAdmissible,
   resolveLevel,
   supportedLevels,
-} from "../lib/thinking-level.js";
+} from "../../common/thinking-level.js";
 
 /** The shape the catalog declares for a sol channel: off maps to an effort the upstream refuses. */
 const sol = {

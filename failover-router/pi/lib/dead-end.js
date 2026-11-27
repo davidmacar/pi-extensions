@@ -13,7 +13,7 @@
  * This module decides what the router should do at that dead end, from the
  * assistant message alone.
  */
-import { classifyFailure } from "./classify.js";
+import { classifyFailure } from "../../common/classify.js";
 
 /**
  * @param {unknown} message an AssistantMessage that ended the run

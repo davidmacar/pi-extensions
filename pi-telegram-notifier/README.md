@@ -39,7 +39,7 @@ A completion notice uses `✅ El agente ha terminado`, reports `terminación de 
 4. Add this extension path to the existing `extensions` array in Pi settings, preserving other entries:
 
    ```json
-   "/absolute/path/to/pi-extensions/pi-telegram-notifier/index.js"
+   "/absolute/path/to/ai-extensions/pi-telegram-notifier/index.js"
    ```
 
 5. Restart Pi. Send a fresh `/start` to the bot **privately from @MacDamon15**, then run `/telegram-notifier setup` in Pi. Setup finds that account's direct private message, verifies the current chat identity, and stores its numeric ID locally with mode 0600. Forwarded starts, groups, other users and a different existing chat binding are rejected.

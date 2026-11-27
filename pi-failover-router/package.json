@@ -1,15 +1,1 @@
-{
-  "name": "pi-failover-router",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "Pi extension: virtual models that fail over across channels when a provider error is channel-owned rather than request-shaped.",
-  "license": "MIT",
-  "engines": {
-    "node": ">=22.19.0"
-  },
-  "scripts": {
-    "test": "node --test \"test/**/*.test.js\"",
-    "check": "node --test \"test/**/*.test.js\""
-  }
-}
+{ "private": true, "type": "module" }

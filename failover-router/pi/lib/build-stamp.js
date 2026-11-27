@@ -7,17 +7,18 @@
  * old code. Every load therefore announces a stamp derived from the sources
  * themselves, so a stale process is visible instead of assumed.
  *
- * The stamp is a hash of the entry file plus every module in `lib/`: editing a
+ * The stamp is a hash of the entry file plus every Pi and shared module: editing a
  * rule, a chain helper or the router itself changes it without anyone having to
  * remember to bump a constant.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ENTRY = join(HERE, "..", "index.js");
+const COMMON = join(HERE, "..", "..", "common");
 
 /**
  * @param {{readFile?: (path: string) => string, readDir?: (path: string) => string[]}} [deps]
@@ -27,10 +28,11 @@ export function buildStamp(deps = {}) {
   const readFile = deps.readFile ?? ((path) => readFileSync(path, "utf8"));
   const readDir = deps.readDir ?? ((path) => readdirSync(path));
   try {
-    const files = [ENTRY, ...readDir(HERE).filter((name) => name.endsWith(".js")).sort().map((name) => join(HERE, name))];
+    const sourceFiles = (dir) => readDir(dir).filter(name => name.endsWith(".js")).sort().map(name => join(dir, name));
+    const files = [ENTRY, ...sourceFiles(HERE), ...sourceFiles(COMMON)];
     const hash = createHash("sha256");
     for (const file of files) {
-      hash.update(file.slice(HERE.length));
+      hash.update(relative(HERE, file));
       hash.update("\0");
       hash.update(readFile(file));
       hash.update("\0");

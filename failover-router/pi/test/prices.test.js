@@ -9,8 +9,8 @@ import {
   prunePriceCache,
   USD_TO_CNY,
   recordPrices,
-} from "../lib/price-cache.js";
-import { fetchSubrouterPrices, MARKETPLACE_URL } from "../lib/subrouter-prices.js";
+} from "../../common/price-cache.js";
+import { fetchSubrouterPrices, MARKETPLACE_URL } from "../../common/subrouter-prices.js";
 
 const refs = ["subrouter-expensive/gpt-6.2-sol", "subrouter-cheap/gpt-6.2-sol", "subrouter-tie/gpt-6.2-sol"];
 

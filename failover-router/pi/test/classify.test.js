@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyFailure, nextCandidate, cooldownMs } from "../lib/classify.js";
+import { classifyFailure, nextCandidate, cooldownMs } from "../../common/classify.js";
 
 // --- The two real failures observed in the user's SubRouter account ---------
 

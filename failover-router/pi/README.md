@@ -77,7 +77,7 @@ This extension reads the raw message instead.
   polling. Repeated settle hooks add only one continuation marker;
 - announces the code it loaded, once per load, as
   `failover-router: build <8 hex> loaded (pid <n>)`. The stamp is a hash of `index.js` plus
-  every module in `lib/`, so it changes with any edit: `"the fix did not help"` and "the fix
+  every Pi and shared module, so it changes with any edit: `"the fix did not help"` and "the fix
   is not loaded" are no longer the same sentence;
 - keeps the model that failed when it will not rotate, so you see the real error instead
   of a silently different channel.
@@ -168,10 +168,10 @@ million tokens). Prices are refreshed dynamically by the extension; native USD m
 are converted with SubRouter's established 6.8 USD→CNY rate.
 
 The card itself is a Gentle Shell section: Gentle Shell has no extension seam for a card, so it
-needs the patch in [`../patches/gentle-pi-channels`](../patches/gentle-pi-channels). Without it
+needs the patch in [`../../patches/gentle-pi-channels`](../../patches/gentle-pi-channels). Without it
 the extension publishes to no listener and nothing else changes. `node
-../patches/gentle-pi-channels/verify.mjs --print` renders the card outside Pi, and `node
-../patches/gentle-pi-channels/apply.mjs --check` says whether an upgrade removed it.
+patches/gentle-pi-channels/verify.mjs --print` renders the card outside Pi, and `node
+patches/gentle-pi-channels/apply.mjs --check` says whether an upgrade removed it.
 
 ### Optional fields next to `chain`
 
@@ -205,7 +205,7 @@ only trusts the five levels these providers accept.
 1. Add the extension path to `~/.pi/agent/settings.json`:
 
    ```json
-   { "extensions": ["/home/<you>/Apps/pi-extensions/pi-failover-router/index.js"] }
+   { "extensions": ["/home/<you>/Apps/ai-extensions/failover-router/pi/index.js"] }
    ```
 
 2. Write the config file (see above).
@@ -221,13 +221,13 @@ only trusts the five levels these providers accept.
 ## Tests
 
 ```bash
-npm test
+npm --prefix failover-router test
 ```
 
 The suite covers classification, configuration, normal routing, throughput measurement and
 bounded recovery through the extension's public routes and hooks. Recovery tests use fake time
 for cooldowns, cancellation, overlapping lifecycle events, exhaustion and success reset.
-Run those directly with `node --test test/recovery.test.js`. `node --test`, no dependencies.
+Run those directly with `node --test failover-router/pi/test/recovery.test.js`. `node --test`, no dependencies.
 
 ## Scope and honest limits
 

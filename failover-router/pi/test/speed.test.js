@@ -15,9 +15,9 @@ import {
   recordSample,
   startingTier,
   tokensPerSecond,
-} from "../lib/speed-cache.js";
-import { orderBySpeed } from "../lib/speed-order.js";
-import { PROBE_MAX_TOKENS } from "../lib/speed-probe.js";
+} from "../../common/speed-cache.js";
+import { orderBySpeed } from "../../common/speed-order.js";
+import { PROBE_MAX_TOKENS } from "../../common/speed-probe.js";
 
 const REF = "subrouter-znu/deepseek-v4.1-flash-1017";
 
@@ -208,12 +208,12 @@ test("speed probes request at most 50 output tokens", () => {
 });
 
 test("the probe module re-exports the same timeout tiers as the cache", async () => {
-  const probe = await import("../lib/speed-probe.js");
+  const probe = await import("../../common/speed-probe.js");
   assert.deepEqual(probe.PROBE_TIMEOUT_TIERS_MS, PROBE_TIMEOUT_TIERS_MS);
 });
 
 test("a channel that is merely slow is measured on the wider tier", async () => {
-  const { probeChannels } = await import("../lib/speed-probe.js");
+  const { probeChannels } = await import("../../common/speed-probe.js");
   // The budget polls every 250 ms, so a tier below that granularity can never be
   // overrun before the reply lands. Milliseconds still stand in for the real
   // tiers: proving which tier did the work must not cost 35 s of wall time.
@@ -247,7 +247,7 @@ test("a channel that is merely slow is measured on the wider tier", async () => 
 });
 
 test("a channel that never answers is recorded with its reason", async () => {
-  const { probeChannels } = await import("../lib/speed-probe.js");
+  const { probeChannels } = await import("../../common/speed-probe.js");
   const complete = async (model, _context, options) =>
     new Promise((_resolve, reject) => {
       options.signal?.addEventListener(
@@ -270,7 +270,7 @@ test("a channel that never answers is recorded with its reason", async () => {
 });
 
 test("a probe that comes back as a channel error reports the provider text", async () => {
-  const { measureChannel } = await import("../lib/speed-probe.js");
+  const { measureChannel } = await import("../../common/speed-probe.js");
   const complete = async () => ({
     role: "assistant",
     stopReason: "error",
@@ -285,7 +285,7 @@ test("a probe that comes back as a channel error reports the provider text", asy
 });
 
 test("a probe that returns no usage says what the response actually was", async () => {
-  const { measureChannel } = await import("../lib/speed-probe.js");
+  const { measureChannel } = await import("../../common/speed-probe.js");
   const complete = async () => ({ role: "assistant", stopReason: "stop", usage: undefined });
   await assert.rejects(
     () => measureChannel({ model: { provider: "p", id: "m" }, complete, requestModel: {} }),
@@ -294,7 +294,7 @@ test("a probe that returns no usage says what the response actually was", async 
 });
 
 test("a probe that returns an empty usage reports the numbers", async () => {
-  const { measureChannel } = await import("../lib/speed-probe.js");
+  const { measureChannel } = await import("../../common/speed-probe.js");
   const complete = async () => ({
     role: "assistant",
     stopReason: "stop",
@@ -307,7 +307,7 @@ test("a probe that returns an empty usage reports the numbers", async () => {
 });
 
 test("a healthy response still measures", async () => {
-  const { measureChannel } = await import("../lib/speed-probe.js");
+  const { measureChannel } = await import("../../common/speed-probe.js");
   let clock = 0;
   const now = () => (clock += 500);
   const complete = async () => ({ role: "assistant", stopReason: "stop", usage: { output: 100 } });
@@ -317,7 +317,7 @@ test("a healthy response still measures", async () => {
 });
 
 test("the probe asks for a level the channel accepts, never off", async () => {
-  const { probeChannels } = await import("../lib/speed-probe.js");
+  const { probeChannels } = await import("../../common/speed-probe.js");
   const seen = [];
   const complete = async (model, _context, options) => {
     seen.push(options);
@@ -346,7 +346,7 @@ test("the probe asks for a level the channel accepts, never off", async () => {
 });
 
 test("a channel that answers with an error is not retried on a wider tier", async () => {
-  const { probeChannels } = await import("../lib/speed-probe.js");
+  const { probeChannels } = await import("../../common/speed-probe.js");
   let attempts = 0;
   const logs = [];
   const complete = async () => {
@@ -377,7 +377,7 @@ test("a channel that answers with an error is not retried on a wider tier", asyn
 });
 
 test("a silent channel is still retried on the next tier", async () => {
-  const { probeChannels } = await import("../lib/speed-probe.js");
+  const { probeChannels } = await import("../../common/speed-probe.js");
   let attempts = 0;
   const logs = [];
   const complete = async (_model, _context, options) => {
@@ -490,7 +490,7 @@ test("a cache stored before attempts existed keeps its error as an attempt", () 
 });
 
 test("a successful measurement carries the message that describes it", async () => {
-  const { probeChannels } = await import("../lib/speed-probe.js");
+  const { probeChannels } = await import("../../common/speed-probe.js");
   const complete = async () => {
     await new Promise((done) => setTimeout(done, 5));
     return { usage: { output: 100 } };
